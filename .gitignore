@@ -1,0 +1,39 @@
+# Node modules
+node_modules/
+
+# Build output
+dist/
+out/
+*.snap
+
+# Electron cache
+*.local
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+*.log
+
+# Snapcraft
+.snap/
+.snapcraft/
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+
+# Linux
+*.swp
+
+# IDEs
+.vscode/
+.idea/
+*.iml
+
+# Env files (si un jour tu ajoutes une config privée)
+.env
+.env.local
+dist/

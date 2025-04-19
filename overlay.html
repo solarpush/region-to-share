@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <style>
+      html,
+      body {
+        margin: 0;
+        background: transparent;
+        width: 100%;
+        height: 100%;
+      }
+
+      #close-btn {
+        position: fixed;
+        top: 5px;
+        right: 5px;
+        background: rgba(255, 0, 0, 0.7);
+        color: white;
+        border: none;
+        border-radius: 50%;
+        width: 25px;
+        height: 25px;
+        font-size: 16px;
+        cursor: pointer;
+        z-index: 1000;
+      }
+
+      #info {
+        position: fixed;
+        top: 10px;
+        right: 50px;
+        background: rgba(0, 0, 0, 0.6);
+        color: white;
+        padding: 6px 12px;
+        border-radius: 4px;
+        font-size: 14px;
+        z-index: 999;
+        font-family: sans-serif;
+      }
+
+      #edges {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        border: 2px dashed red;
+        box-sizing: border-box;
+      }
+    </style>
+  </head>
+  <body>
+    <button id="close-btn">×</button>
+    <div id="edges"></div>
+    <div id="info">🔒 Click-through</div>
+
+    <script>
+      const { ipcRenderer } = require("electron");
+
+      document.getElementById("close-btn").onclick = () => {
+        ipcRenderer.send("close-overlay");
+      };
+
+      // Réagit au changement de mode
+      ipcRenderer.on("mode", (_, mode) => {
+        const info = document.getElementById("info");
+        info.textContent =
+          mode === "interactive"
+            ? "✅ Interactif (Ctrl+Shift+T pour toggle)"
+            : "🔒 Click-through (Ctrl+Shift+T pour toggle)";
+      });
+    </script>
+  </body>
+</html>
