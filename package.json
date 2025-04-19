@@ -1,14 +1,14 @@
 {
   "name": "region-to-share",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "main": "main.js",
   "author": {
     "name": "Pierre Nicolas",
     "email": "pierre.mjenr@gmail.com",
-    "url": "https://lpdjs.fr"
+    "url": "https://github.com/solarpush/region-to-share"
   },
   "license": "MIT",
-  "homepage": "https://regiontoshare.lpdjs.fr",
+  "homepage": "https://github.com/solarpush/region-to-share",
   "summary": "Draw and share a region of your screen using a transparent overlay",
   "description": "RegionToShare is a lightweight Electron-based tool that allows users to draw and define a shareable region of the screen using a transparent overlay.\n\nIt can be useful for screen sharing, screen recording, or screenshot tools that need user-defined crop areas.\n\nThe app uses Electron's setIgnoreMouseEvents to allow click-through mode with a toggleable shortcut.\n\nNo personal data is collected. It runs entirely locally.",
   "devDependencies": {
