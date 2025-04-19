@@ -1,3 +1,9 @@
+<p align="center">
+  <img src="build/icon.png" alt="RegionToShare Icon" width="128"/>
+</p>
+
+---
+
 # 🖼️ RegionToShare
 
 > A lightweight Electron-based tool to draw and define a shareable region of the screen using a transparent overlay.
