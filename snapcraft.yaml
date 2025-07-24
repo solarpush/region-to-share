@@ -1,6 +1,6 @@
 name: region-to-share
 base: core22
-version: '1.0.1'
+version: '1.0.2'
 summary: Share selected screen regions in video conferences
 description: |
   Region-to-Share allows you to select a specific area of your screen
@@ -60,6 +60,19 @@ parts:
       - python3-pyqt5
       - python3-opencv
       - python3-numpy
+      - libqt5core5a
+      - libqt5gui5
+      - libqt5widgets5
+      - libqt5x11extras5
+      - qt5-gtk-platformtheme
+      - libqt5dbus5
+      - libxcb-xinerama0
+      - libxcb-icccm4
+      - libxcb-image0
+      - libxcb-keysyms1
+      - libxcb-randr0
+      - libxcb-render-util0
+      - libxcb-xkb1
     override-pull: |
       craftctl default
       # Remove local virtual environment to avoid external symlinks
@@ -76,8 +89,21 @@ parts:
       #!/bin/bash
       cd $SNAP
       export PYTHONPATH="$SNAP/lib/python3.10/site-packages:$SNAP/usr/lib/python3/dist-packages"
-      export QT_PLUGIN_PATH="$SNAP/usr/lib/x86_64-linux-gnu/qt5/plugins"
+      
+      # Qt5 configuration for PyQt5
+      export QT_PLUGIN_PATH="$SNAP/lib/python3.10/site-packages/PyQt5/Qt5/plugins:$SNAP/usr/lib/x86_64-linux-gnu/qt5/plugins"
+      export QT_QPA_PLATFORM_PLUGIN_PATH="$SNAP/lib/python3.10/site-packages/PyQt5/Qt5/plugins/platforms"
+      export LD_LIBRARY_PATH="$SNAP/lib/python3.10/site-packages/PyQt5/Qt5/lib:$LD_LIBRARY_PATH"
+      export QT_XKB_CONFIG_ROOT="$SNAP/usr/share/X11/xkb"
+      export QTWEBENGINE_DISABLE_SANDBOX=1
+      export QT_QPA_PLATFORM=xcb
+      
+      # Fallback to other platforms if xcb fails
+      export QT_QPA_PLATFORM_PLUGIN_PATH="$SNAP/lib/python3.10/site-packages/PyQt5/Qt5/plugins/platforms:$SNAP/usr/lib/x86_64-linux-gnu/qt5/plugins/platforms"
+      
+      # Other environment variables
       export XDG_DATA_DIRS="$SNAP/usr/share:$XDG_DATA_DIRS"
+      
       exec python3 -m region_to_share.main "$@"
       EOF
       chmod +x $CRAFT_PART_INSTALL/bin/region-to-share
