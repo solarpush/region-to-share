@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 Region to Share - Main Application
-Permet de sélectionner une zone d'écran et de la partager via une fenêtre transparente
-Compatible X11 et Wayland
+Allows selecting a screen area and sharing it via a transparent window
+Compatible with X11 and Wayland
 """
 
 import sys
@@ -34,15 +34,15 @@ class RegionToShareApp:
         self.timer.start(100)
 
     def signal_handler(self, signum, frame):
-        """Gestionnaire de signaux pour fermeture propre"""
-        print("Signal de fermeture reçu, nettoyage en cours...")
+        """Signal handler for clean shutdown"""
+        print("Shutdown signal received, cleaning up...")
         self.cleanup()
         self.app.quit()
         sys.exit(0)
 
     def cleanup(self):
-        """Nettoyage des ressources"""
-        print("Nettoyage des ressources...")
+        """Resource cleanup"""
+        print("Cleaning up resources...")
         if self.display_window:
             self.display_window.close()
             self.display_window = None
@@ -54,16 +54,16 @@ class RegionToShareApp:
             self.app.quit()
 
     def start_selection(self):
-        """Démarre le processus de sélection de zone"""
+        """Starts the region selection process"""
         self.screen_selector = ScreenSelector()
         self.screen_selector.selection_made.connect(self.on_selection_made)
         self.screen_selector.show()
 
     def on_selection_made(self, x, y, width, height):
-        """Callback appelé quand une zone est sélectionnée"""
-        print(f"Zone sélectionnée: x={x}, y={y}, width={width}, height={height}")
+        """Callback called when a region is selected"""
+        print(f"Region selected: x={x}, y={y}, width={width}, height={height}")
 
-        # Créer la fenêtre d'affichage
+        # Create display window
         self.display_window = DisplayWindow(x, y, width, height)
         self.display_window.closed.connect(self.cleanup)
         self.display_window.show()
@@ -73,13 +73,13 @@ class RegionToShareApp:
             self.screen_selector.close()
 
     def run(self):
-        """Lance l'application"""
+        """Launches the application"""
         self.start_selection()
         return self.app.exec_()
 
 
 def main():
-    """Point d'entrée principal"""
+    """Main entry point"""
     app = RegionToShareApp()
     return app.run()
 

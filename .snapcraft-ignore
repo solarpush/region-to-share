@@ -1,0 +1,11 @@
+venv_region/
+venv_region/**
+venv_region_backup_temp/
+venv_region_backup_temp/**
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.idea/
+*.egg-info/
+*.log

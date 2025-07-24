@@ -1,6 +1,6 @@
 """
-Module de sélection de zone d'écran
-Compatible X11 et Wayland
+Screen region selection module
+Compatible with X11 and Wayland
 """
 
 import sys
@@ -20,7 +20,7 @@ import mss
 
 
 class ScreenSelector(QWidget):
-    """Widget de sélection de zone d'écran"""
+    """Screen region selection widget"""
 
     selection_made = pyqtSignal(int, int, int, int)  # x, y, width, height
 
@@ -34,23 +34,22 @@ class ScreenSelector(QWidget):
         self.take_screenshot()
 
     def setup_ui(self):
-        """Configuration de l'interface utilisateur"""
-        self.setWindowTitle("Sélection de zone - Region to Share")
+        """User interface configuration"""
+        self.setWindowTitle("Region Selection - Region to Share")
 
-        # Rendre la fenêtre en plein écran et sans bordures
+        # Make window fullscreen and borderless
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setWindowState(Qt.WindowFullScreen)
 
-        # Cursor de croix pour la sélection
+        # Cross cursor for selection
         self.setCursor(Qt.CrossCursor)
 
-        # Layout principal
+        # Main layout
         layout = QVBoxLayout()
 
         # Instructions
         self.instruction_label = QLabel(
-            "Cliquez et glissez pour sélectionner une zone de l'écran\n"
-            "Appuyez sur Échap pour annuler"
+            "Click and drag to select a screen region\n" "Press Esc to cancel"
         )
         self.instruction_label.setAlignment(Qt.AlignCenter)
         self.instruction_label.setStyleSheet(
@@ -65,67 +64,67 @@ class ScreenSelector(QWidget):
         """
         )
 
-        # Positionner les instructions en haut
+        # Position instructions at the top
         layout.addWidget(self.instruction_label)
         layout.addStretch()
 
         self.setLayout(layout)
 
-        # Rubber band pour la sélection
+        # Rubber band for selection
         self.rubber_band = QRubberBand(QRubberBand.Rectangle, self)
 
     def take_screenshot(self):
-        """Prend une capture d'écran de tous les moniteurs"""
+        """Takes a screenshot of all monitors"""
         try:
-            # Utiliser Qt pour la capture d'écran (plus simple et fiable)
+            # Use Qt for screenshot (simpler and more reliable)
             screen = QApplication.primaryScreen()
             self.screenshot = screen.grabWindow(QApplication.desktop().winId())
-            print("✅ Capture d'écran réussie")
+            print("✅ Screenshot successful")
 
         except Exception as e:
-            print(f"Erreur lors de la capture d'écran: {e}")
-            # Fallback : screenshot noir
+            print(f"Error taking screenshot: {e}")
+            # Fallback: black screenshot
             self.screenshot = QPixmap(1920, 1080)
             self.screenshot.fill(QColor(50, 50, 50))
 
     def paintEvent(self, event):
-        """Dessine la capture d'écran en arrière-plan"""
+        """Draws the screenshot as background"""
         painter = QPainter(self)
 
         if self.screenshot:
-            # Dessiner la capture d'écran
+            # Draw the screenshot
             painter.drawPixmap(self.rect(), self.screenshot)
 
-            # Assombrir la zone non sélectionnée
+            # Darken the non-selected area
             if self.rubber_band and self.rubber_band.isVisible():
-                # Zone sélectionnée
+                # Selected area
                 selected_rect = self.rubber_band.geometry()
 
-                # Dessiner l'overlay sombre partout sauf sur la sélection
+                # Draw dark overlay everywhere except selection
                 overlay = QColor(0, 0, 0, 100)
                 painter.fillRect(self.rect(), overlay)
 
-                # Effacer l'overlay sur la zone sélectionnée
+                # Clear overlay on selected area
                 painter.setCompositionMode(QPainter.CompositionMode_Clear)
                 painter.fillRect(selected_rect, Qt.transparent)
 
     def mousePressEvent(self, event):
-        """Début de sélection"""
+        """Start of selection"""
         if event.button() == Qt.LeftButton and self.rubber_band:
             self.start_point = event.pos()
             self.rubber_band.setGeometry(QRect(self.start_point, self.start_point))
             self.rubber_band.show()
 
     def mouseMoveEvent(self, event):
-        """Mise à jour de la sélection"""
+        """Update selection"""
         if self.rubber_band and self.rubber_band.isVisible():
             self.rubber_band.setGeometry(
                 QRect(self.start_point, event.pos()).normalized()
             )
-            self.update()  # Redessiner pour l'overlay
+            self.update()  # Redraw for overlay
 
     def mouseReleaseEvent(self, event):
-        """Fin de sélection"""
+        """End of selection"""
         if (
             event.button() == Qt.LeftButton
             and self.rubber_band
@@ -134,7 +133,7 @@ class ScreenSelector(QWidget):
             self.end_point = event.pos()
             selection_rect = QRect(self.start_point, self.end_point).normalized()
 
-            # Vérifier que la sélection a une taille minimale
+            # Check that selection has minimum size
             if selection_rect.width() > 10 and selection_rect.height() > 10:
                 self.selection_made.emit(
                     selection_rect.x(),
@@ -146,7 +145,7 @@ class ScreenSelector(QWidget):
             self.rubber_band.hide()
 
     def keyPressEvent(self, event):
-        """Gestion des touches"""
+        """Key handling"""
         if event.key() == Qt.Key_Escape:
             self.close()
         super().keyPressEvent(event)

@@ -2,7 +2,7 @@
 Name=Region to Share
 Comment=Share selected screen regions in video calls
 Exec=region-to-share
-Icon=region-to-share
+Icon=region-to-share.png
 Terminal=false
 Type=Application
 Categories=Utility;Graphics;Network;

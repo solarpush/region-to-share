@@ -1,6 +1,6 @@
 """
-Fenêtre d'affichage pour montrer la zone sélectionnée
-Cette fenêtre peut être partagée directement dans les applications de visioconférence
+Display window to show the selected region
+This window can be shared directly in video conferencing applications
 """
 
 from PyQt5.QtWidgets import (
@@ -20,7 +20,7 @@ import cv2
 
 
 class DisplayWindow(QWidget):
-    """Fenêtre d'affichage pour la zone sélectionnée"""
+    """Display window for the selected region"""
 
     closed = pyqtSignal()
 
@@ -36,20 +36,20 @@ class DisplayWindow(QWidget):
         self.start_capture()
 
     def setup_ui(self):
-        """Configuration de l'interface utilisateur"""
-        # Configuration de la fenêtre
-        self.setWindowTitle("Region to Share - Zone Sélectionnée")
+        """User interface configuration"""
+        # Window configuration
+        self.setWindowTitle("Region to Share - Selected Region")
         self.setWindowFlags(Qt.Window)
 
-        # Taille de la fenêtre = exactement la taille de la région capturée
+        # Window size = exactly the size of captured region
         self.resize(self.region_width, self.region_height)
 
-        # Layout principal sans marges
+        # Main layout without margins
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # Zone d'affichage de la capture (prend tout l'espace)
+        # Display area for capture (takes all space)
         self.display_label = QLabel()
         self.display_label.setAlignment(Qt.AlignCenter)  # type: ignore
         self.display_label.setStyleSheet(
@@ -67,15 +67,15 @@ class DisplayWindow(QWidget):
         layout.addWidget(self.display_label)
         self.setLayout(layout)
 
-        # Créer les contrôles en overlay
+        # Create overlay controls
         self.create_overlay_controls()
 
-        # Centrer la fenêtre
+        # Center the window
         self.center_window()
 
     def create_overlay_controls(self):
-        """Crée les contrôles en overlay par-dessus l'image"""
-        # Barre de contrôle en haut (semi-transparente)
+        """Creates overlay controls over the image"""
+        # Control bar at top (semi-transparent)
         self.control_bar = QWidget(self)
         self.control_bar.setFixedHeight(35)
         self.control_bar.setStyleSheet(
@@ -88,21 +88,20 @@ class DisplayWindow(QWidget):
         """
         )
 
-        # Layout pour les contrôles
-        controls_layout = QHBoxLayout(self.control_bar)
-        controls_layout.setContentsMargins(8, 4, 8, 4)
+        # Layout for controls
+        control_layout = QHBoxLayout(self.control_bar)
+        control_layout.setContentsMargins(5, 2, 5, 2)
 
-        # Informations sur la zone
-        self.info_label = QLabel(f"Zone: {self.region_width}×{self.region_height} px")
-        self.info_label.setStyleSheet("QLabel { color: white; font-size: 11px; }")
+        # Information about the region
+        self.region_info_label = QLabel(f"{self.region_width}×{self.region_height}")
 
-        # Statut de capture
+        # Capture status
         self.status_label = QLabel("🔴 Live")
         self.status_label.setStyleSheet(
             "QLabel { color: #4CAF50; font-weight: bold; font-size: 11px; }"
         )
 
-        # Boutons
+        # Buttons
         self.pause_btn = QPushButton("⏸️")
         self.pause_btn.setFixedSize(25, 25)
         self.pause_btn.setStyleSheet(
@@ -131,22 +130,20 @@ class DisplayWindow(QWidget):
         self.close_btn.setStyleSheet(self.pause_btn.styleSheet())
         self.close_btn.clicked.connect(self.close)
 
-        # Ajouter au layout
-        controls_layout.addWidget(self.info_label)
-        controls_layout.addWidget(self.status_label)
-        controls_layout.addStretch()
-        controls_layout.addWidget(self.pause_btn)
-        controls_layout.addWidget(self.refresh_btn)
-        controls_layout.addWidget(self.close_btn)
+        # Add to layout
+        control_layout.addWidget(self.region_info_label)
+        control_layout.addWidget(self.status_label)
+        control_layout.addStretch()
+        control_layout.addWidget(self.pause_btn)
+        control_layout.addWidget(self.refresh_btn)
+        control_layout.addWidget(self.close_btn)
 
-        # Positionner la barre en haut de la fenêtre
+        # Position bar at top of window
         self.control_bar.move(5, 5)
         self.control_bar.resize(self.width() - 10, 35)
 
-        # Instruction en bas (cachée par défaut)
-        self.instruction_label = QLabel(
-            "💡 Partagez cette fenêtre dans Google Meet/Teams", self
-        )
+        # Instruction at bottom (hidden by default)
+        self.instruction_label = QLabel("Hover over the control bar to see options")
         self.instruction_label.setStyleSheet(
             """
             QLabel {
@@ -162,10 +159,10 @@ class DisplayWindow(QWidget):
         self.instruction_label.move(
             5, self.height() - self.instruction_label.height() - 5
         )
-        self.instruction_label.hide()  # Caché par défaut
+        self.instruction_label.hide()  # Hidden by default
 
     def resizeEvent(self, event):
-        """Repositionner les contrôles lors du redimensionnement"""
+        """Reposition controls when resizing"""
         super().resizeEvent(event)
         if hasattr(self, "control_bar"):
             self.control_bar.resize(self.width() - 10, 35)
@@ -175,24 +172,24 @@ class DisplayWindow(QWidget):
             )
 
     def center_window(self):
-        """Centre la fenêtre sur l'écran"""
+        """Centers the window on screen"""
         screen = self.screen().availableGeometry()
         window = self.frameGeometry()
         window.moveCenter(screen.center())
         self.move(window.topLeft())
 
     def start_capture(self):
-        """Démarre la capture périodique"""
+        """Starts periodic capture"""
         self.capture_timer.timeout.connect(self.capture_frame)
         self.capture_timer.start(33)  # ~30 FPS (33ms)
 
     def capture_frame(self):
-        """Capture et affiche une frame de la région avec curseur manuel"""
+        """Captures and displays a frame of the region with manual cursor"""
         if not self.is_capturing:
             return
 
         try:
-            # Capturer la région avec mss
+            # Capture region with mss
             with mss.mss() as sct:
                 region = {
                     "top": self.region_y,
@@ -202,7 +199,7 @@ class DisplayWindow(QWidget):
                 }
                 screenshot = sct.grab(region)
 
-                # Convertir en format Qt
+                # Convert to Qt format
                 img_array = np.array(screenshot)
                 img_rgb = cv2.cvtColor(img_array, cv2.COLOR_BGRA2RGB)
 
@@ -213,11 +210,11 @@ class DisplayWindow(QWidget):
                     img_rgb.data, w, h, bytes_per_line, QImage.Format_RGB888
                 )
 
-                # Créer un pixmap et dessiner le curseur dessus
+                # Create a pixmap and draw cursor on it
                 pixmap = QPixmap.fromImage(qt_image)
 
-                # Ajouter le curseur manuellement
-                self.draw_cursor_on_pixmap(pixmap)
+                # Add cursor manually
+                pixmap_with_cursor = self.draw_cursor_on_pixmap(pixmap)
 
                 # Afficher le pixmap avec curseur
                 self.display_label.setPixmap(pixmap)
@@ -226,12 +223,12 @@ class DisplayWindow(QWidget):
             self.display_label.setText(f"Erreur de capture: {e}")
 
     def draw_cursor_on_pixmap(self, pixmap):
-        """Dessine le curseur sur le pixmap"""
+        """Draws the cursor on the pixmap"""
         try:
-            # Obtenir la position actuelle du curseur
+            # Get current cursor position
             cursor_pos = QCursor.pos()
 
-            # Calculer la position relative dans la région capturée
+            # Calculate relative position in captured region
             relative_x = cursor_pos.x() - self.region_x
             relative_y = cursor_pos.y() - self.region_y
 
@@ -275,7 +272,7 @@ class DisplayWindow(QWidget):
             print(f"Erreur lors du dessin du curseur: {e}")
 
     def toggle_capture(self):
-        """Active/désactive la capture"""
+        """Enables/disables capture"""
         self.is_capturing = not self.is_capturing
         if self.is_capturing:
             self.pause_btn.setText("⏸️")
@@ -291,20 +288,20 @@ class DisplayWindow(QWidget):
             )
 
     def force_refresh(self):
-        """Force une actualisation de la capture"""
+        """Forces a capture refresh"""
         if not self.is_capturing:
             self.capture_frame()
 
     def update_region(self, x, y, width, height):
-        """Met à jour la région à capturer"""
+        """Updates the region to capture"""
         self.region_x = x
         self.region_y = y
         self.region_width = width
         self.region_height = height
-        self.info_label.setText(f"Zone: {width}×{height} px")
+        self.region_info_label.setText(f"Region: {width}×{height} px")
 
     def enterEvent(self, event):
-        """Afficher les contrôles au survol"""
+        """Show controls on hover"""
         if hasattr(self, "control_bar"):
             self.control_bar.show()
         if hasattr(self, "instruction_label"):
@@ -312,7 +309,7 @@ class DisplayWindow(QWidget):
         super().enterEvent(event)
 
     def leaveEvent(self, event):
-        """Masquer les contrôles quand la souris sort"""
+        """Hide controls when mouse leaves"""
         if hasattr(self, "control_bar"):
             self.control_bar.hide()
         if hasattr(self, "instruction_label"):
@@ -320,7 +317,7 @@ class DisplayWindow(QWidget):
         super().leaveEvent(event)
 
     def closeEvent(self, a0):
-        """Nettoyage à la fermeture"""
+        """Cleanup on close"""
         self.capture_timer.stop()
         self.closed.emit()
         super().closeEvent(a0)

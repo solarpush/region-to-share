@@ -1,124 +1,130 @@
-# Region to Share
+# Region to Share 📺
 
-Une application Linux simple et efficace pour partager des zones spécifiques de votre écran dans les appels vidéo (Google Meet, Teams, Discord, etc.).
+A simple and efficient Linux application for sharing specific areas of your screen in video calls (Google Meet, Teams, Discord, etc.).
 
-## 🚀 Fonctionnalités
+## 🚀 Features
 
-- ✅ **Sélection interactive** de zone d'écran par cliquer-glisser
-- ✅ **Fenêtre d'affichage en temps réel** (30 FPS) de la zone sélectionnée
-- ✅ **Partage direct** dans les applications de visioconférence via "Partager fenêtre"
-- ✅ **Contrôles intuitifs** : Pause/Reprise, Actualisation
-- ✅ **Compatible** avec toutes les distributions Linux (X11/Wayland)
-- ✅ **Léger et rapide** : Pas de dépendances complexes
+- ✅ **Interactive area selection** with click and drag
+- ✅ **Real-time display window** (30 FPS) of the selected area
+- ✅ **Direct sharing** in video conferencing apps via "Share window"
+- ✅ **Intuitive controls**: Pause/Resume, Refresh
+- ✅ **Cursor visibility** in captured area
+- ✅ **Exact window ratio** without white borders
+- ✅ **Compatible** with all Linux distributions (X11/Wayland)
+- ✅ **Lightweight and fast**: No complex dependencies
 
-## 🎯 Comment ça marche
+## 🎯 How it works
 
-1. **Lancez l'application** → Sélectionnez une zone d'écran
-2. **Une fenêtre s'ouvre** → Affiche en temps réel le contenu de cette zone
-3. **Dans votre app de visio** → "Partager l'écran" → "Fenêtre" → Sélectionnez "Region to Share"
-4. **✅ Vous partagez uniquement cette zone !**
+1. **Launch the application** → Select a screen area
+2. **A window opens** → Shows real-time content of this area
+3. **In your video app** → "Share screen" → "Window" → Select "Region to Share"
+4. **✅ You share only this area!**
 
-## 📋 Prérequis
+## 📋 Requirements
 
-- Linux (toute distribution moderne)
+- Linux (any modern distribution)
 - Python 3.8+
-- PyQt5 (installé automatiquement)
+- PyQt5 (installed automatically)
 
 ## 🔧 Installation
 
-### Méthode 1: Installation simple
+### Via Snap Store (recommended)
 
 ```bash
-# Cloner le projet
-git clone https://github.com/solarpush/region-to-share
+# Install from Snap Store
+sudo snap install region-to-share
+```
+
+### Via local snap file
+
+```bash
+# Install from local snap file
+sudo snap install --dangerous region-to-share_1.0.0_amd64.snap
+```
+
+### From source code
+
+````bash
+# Clone the repository
+git clone https://github.com/solarpush/region-to-share.git
 cd region-to-share
 
-# Installer les dépendances système
-sudo apt update
-sudo apt install python3-pyqt5 python3-pip python3-opencv python3-numpy python3-mss
+# Setup virtual environment
+./run_venv.sh
 
-# C'est tout ! Lancez l'application
+# Launch the application
+source venv_region/bin/activate
+python -m region_to_share.main
+```
+
+## 🎯 Usage
+
+### Launch
+
+```bash
 ./run.sh
 ```
 
-### Méthode 2: Avec pip
+### Simple steps
 
-````bash
-# Cloner le projet
-git clone https://github.com/solarpush/region-to-share
-cd region-to-share
+1. **Launch the application**: `./run.sh`
+2. **Select a region**: Click and drag on your screen
+3. **Display window**: A window opens with your region in real-time
+4. **Share in video conference**:
+   - Google Meet/Teams/Discord: "Share screen" → "Window"
+   - Select "Region to Share - Selected Region"
+   - ✅ You share only this region!
 
-# Installer les dépendances Python
-pip3 install -r requirements.txt
+### Controls
 
-# Lancer l'application
-## 🎯 Utilisation
-
-### Lancement
-
-```bash
-./run.sh
-````
-
-### Étapes simples
-
-1. **Lancer l'application** : `./run.sh`
-2. **Sélectionner une zone** : Cliquez et glissez sur votre écran
-3. **Fenêtre d'affichage** : Une fenêtre s'ouvre avec votre zone en temps réel
-4. **Partager dans visioconférence** :
-   - Google Meet/Teams/Discord : "Partager l'écran" → "Fenêtre"
-   - Sélectionnez "Region to Share - Zone Sélectionnée"
-   - ✅ Vous partagez uniquement cette zone !
-
-### Contrôles
-
-- **⏸️ Pause/▶️ Reprendre** : Arrêter/reprendre la capture
-- **🔄 Actualiser** : Forcer une mise à jour
-- **❌ Fermer** : Fermer l'application
+- **⏸️ Pause/▶️ Resume**: Stop/resume capture
+- **🔄 Refresh**: Force update
+- **❌ Close**: Close application
 
 ## 🛠️ Architecture
 
 ```
 region_to_share/
-├── main.py              # Point d'entrée principal
-├── screen_selector.py   # Sélection interactive de zone
-├── display_window.py    # Fenêtre d'affichage temps réel
-└── __init__.py          # Package Python
+├── main.py              # Main entry point
+├── screen_selector.py   # Interactive region selection
+├── display_window.py    # Real-time display window
+└── __init__.py          # Python package
 ```
 
 ### Technologies
 
-- **PyQt5** : Interface graphique moderne
-- **mss** : Capture d'écran haute performance
-- **OpenCV + NumPy** : Traitement d'image efficace
-- **Snapcraft** : Empaquetage Linux universel
+- **PyQt5**: Modern graphical interface
+- **mss**: High-performance screen capture
+- **OpenCV + NumPy**: Efficient image processing
+- **Snapcraft**: Universal Linux packaging
 
-## 📦 Package Snap
+## 📦 Snap Package
 
-### Construction du snap
+### Building the snap
 
 ```bash
-# Installer snapcraft
+# Install snapcraft
 sudo snap install snapcraft --classic
 
-# Construire le snap
+# Build the snap
 snapcraft
 
-# Installer
+# Install
 sudo snap install --devmode *.snap
 ```
 
-## 🤝 Contribution
+## 🤝 Contributing
 
-1. Fork le projet
-2. Créer une branche feature
-3. Commit vos changements
-4. Créer une Pull Request
+1. Fork the project
+2. Create a feature branch
+3. Commit your changes
+4. Create a Pull Request
 
-## 📄 Licence
+## 📄 License
 
-MIT License - voir le fichier [LICENSE](LICENSE) pour plus de détails.
+MIT License - see the [LICENSE](LICENSE) file for details.
 
 ---
 
-**Region to Share** - Partage de zones d'écran simplifié pour Linux 🐧
+**Region to Share** - Simplified screen region sharing for Linux 🐧
+````

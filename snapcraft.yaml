@@ -1,19 +1,19 @@
 name: region-to-share
 base: core22
-version: '1.0.0'
-summary: Partage de zones d'écran sélectionnées dans les visioconférences
+version: '1.0.1'
+summary: Share selected screen regions in video conferences
 description: |
-  Region-to-Share permet de sélectionner une zone spécifique de votre écran
-  et de l'afficher dans une fenêtre que vous pouvez partager directement 
-  dans vos applications de visioconférence (Google Meet, Teams, Discord, etc.).
+  Region-to-Share allows you to select a specific area of your screen
+  and display it in a window that you can share directly 
+  in your video conferencing applications (Google Meet, Teams, Discord, etc.).
   
-  Fonctionnalités:
-  - Sélection interactive de zones d'écran
-  - Fenêtre d'affichage en temps réel (30 FPS)
-  - Compatible avec toutes les applications de visioconférence
-  - Interface simple et intuitive
-  - Pause/reprise de la capture
-  - Mise à jour automatique lors de changements d'écran
+  Features:
+  - Interactive screen region selection
+  - Real-time display window (30 FPS)
+  - Compatible with all video conferencing applications
+  - Simple and intuitive interface
+  - Pause/resume capture
+  - Automatic update on screen changes
 
 grade: stable
 confinement: strict
@@ -39,6 +39,7 @@ parts:
   region-to-share:
     plugin: python
     source: .
+    source-type: local
     python-requirements:
       - requirements.txt
     build-packages:
@@ -59,8 +60,17 @@ parts:
       - python3-pyqt5
       - python3-opencv
       - python3-numpy
+    override-pull: |
+      craftctl default
+      # Remove local virtual environment to avoid external symlinks
+      rm -rf $CRAFT_PART_SRC/venv_region
+      # Also remove any potential __pycache__ directories
+      find $CRAFT_PART_SRC -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+      find $CRAFT_PART_SRC -name "*.pyc" -delete 2>/dev/null || true
     override-build: |
       craftctl default
+      # Ensure no virtual environment is included
+      rm -rf $CRAFT_PART_SRC/venv_region* || true
       mkdir -p $CRAFT_PART_INSTALL/bin
       cat > $CRAFT_PART_INSTALL/bin/region-to-share << 'EOF'
       #!/bin/bash

@@ -1,0 +1,30 @@
+# Exclude virtual environment from snap packaging
+venv_region/
+venv_region/**
+venv_region_backup_temp/
+venv_region_backup_temp/**
+
+# Exclude development files
+.git/
+.gitignore
+*.pyc
+__pycache__/
+**/__pycache__/
+
+# Exclude build artifacts
+*.o
+*.so
+build/
+parts/
+stage/
+prime/
+*.snap
+
+# Exclude IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Exclude logs
+*.log
