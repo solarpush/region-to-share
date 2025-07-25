@@ -1,9 +1,9 @@
 [Desktop Entry]
 Name=Region to Share
-Comment=Share selected screen regions in video calls
+Comment=Share selected screen regions - perfect for ultrawide screens
 Exec=region-to-share
-Icon=region-to-share.png
+Icon=${SNAP}/usr/share/pixmaps/region-to-share.png
 Terminal=false
 Type=Application
 Categories=Utility;Graphics;Network;
-Keywords=screen;share;region;video;meeting;conference;
+Keywords=screen;share;region;video;meeting;conference;ultrawide;widescreen;multi-monitor;zoom;teams;discord;google-meet;screenshare;capture;21:9;32:9;

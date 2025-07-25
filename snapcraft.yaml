@@ -1,7 +1,7 @@
 name: region-to-share
 base: core22
-version: '1.0.2'
-summary: Share selected screen regions in video conferences
+version: '1.0.3'
+summary: Share selected screen regions - perfect for ultrawide screens
 description: |
   Region-to-Share allows you to select a specific area of your screen
   and display it in a window that you can share directly 
@@ -11,13 +11,21 @@ description: |
   - Interactive screen region selection
   - Real-time display window (30 FPS)
   - Compatible with all video conferencing applications
+  - Perfect solution for ultrawide screens and multi-monitor setups
   - Simple and intuitive interface
   - Pause/resume capture
   - Automatic update on screen changes
+  
+  Ideal for ultrawide monitor users who want to share only a portion 
+  of their screen without showing their entire workspace.
 
 grade: stable
 confinement: strict
-
+website: https://github.com/solarpush/region-to-share/blob/main/README.md
+issues: https://github.com/solarpush/region-to-share/issues
+source-code: https://github.com/solarpush/region-to-share
+donation: 
+  - https://coff.ee/solarpush
 architectures:
   - build-on: amd64
 
@@ -114,3 +122,6 @@ parts:
     organize:
       region-to-share.desktop: usr/share/applications/region-to-share.desktop
       region-to-share.png: usr/share/pixmaps/region-to-share.png
+    stage:
+      - usr/share/applications/region-to-share.desktop
+      - usr/share/pixmaps/region-to-share.png
