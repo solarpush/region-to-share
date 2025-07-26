@@ -254,9 +254,11 @@ class DisplayWindow(QWidget):
                     (relative_x, relative_y),
                     (relative_x, relative_y + cursor_size),
                     (relative_x + cursor_size // 3, relative_y + cursor_size * 2 // 3),
+                    (relative_x + cursor_size // 2, relative_y + cursor_size * 2 // 3 + 2),
                     (relative_x + cursor_size // 2, relative_y + cursor_size // 2),
-                    (relative_x + cursor_size * 2 // 3, relative_y + cursor_size // 3),
-                    (relative_x + cursor_size, relative_y),
+                    (relative_x + cursor_size * 2 // 3, relative_y + cursor_size * 2 // 3),
+                    (relative_x + cursor_size, relative_y + cursor_size // 2),
+                    (relative_x + cursor_size // 3, relative_y),
                 ]
 
                 # Convertir en QPolygon pour Qt

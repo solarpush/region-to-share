@@ -1,8 +1,8 @@
-.PHONY: help clean build upload release install test
+.PHONY: help clean build upload release install test init_venv
 
 # Variables
 SNAP_NAME = region-to-share
-VERSION = 1.0.3
+VERSION = 1.0.4
 SNAP_FILE = $(SNAP_NAME)_$(VERSION)_amd64.snap
 
 help:
@@ -28,7 +28,7 @@ upload:
 	snapcraft upload $(SNAP_FILE) --release=stable
 
 release: clean build upload
-	@echo "✅ Build and upload completed successfully!"
+	@echo "✅ Build and upload completed successfully"
 
 install:
 	@echo "Installing $(SNAP_FILE) locally..."
@@ -38,3 +38,10 @@ test:
 	@echo "Testing region-to-share installation..."
 	snap list | grep region-to-share
 	@echo "Try running: region-to-share"
+
+init_venv:
+	@echo "Initializing virtual environment..."
+	python3 -m venv venv_region
+	. ./venv_region/bin/activate; \
+    pip install --upgrade pip; \
+    pip install -r requirements.txt

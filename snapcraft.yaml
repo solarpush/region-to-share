@@ -1,6 +1,6 @@
 name: region-to-share
 base: core22
-version: '1.0.3'
+version: '1.0.4'
 summary: Share selected screen regions - perfect for ultrawide screens
 description: |
   Region-to-Share allows you to select a specific area of your screen
@@ -122,6 +122,4 @@ parts:
     organize:
       region-to-share.desktop: usr/share/applications/region-to-share.desktop
       region-to-share.png: usr/share/pixmaps/region-to-share.png
-    stage:
-      - usr/share/applications/region-to-share.desktop
-      - usr/share/pixmaps/region-to-share.png
+   
