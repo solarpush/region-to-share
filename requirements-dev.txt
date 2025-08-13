@@ -1,0 +1,25 @@
+# Development Requirements
+# Include all production requirements
+-r requirements.txt
+
+# Testing
+pytest>=7.0.0
+pytest-qt>=4.2.0
+pytest-mock>=3.10.0
+
+# Code Quality
+black>=23.0.0
+flake8>=6.0.0
+mypy>=1.0.0
+
+# Build Tools
+build>=0.10.0
+wheel>=0.40.0
+
+# Packaging
+setuptools>=65.0.0
+twine>=4.0.0
+
+# Documentation
+sphinx>=6.0.0
+sphinx-rtd-theme>=1.2.0

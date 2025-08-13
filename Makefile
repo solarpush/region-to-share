@@ -2,7 +2,7 @@
 
 # Variables
 SNAP_NAME = region-to-share
-VERSION = 1.0.4
+VERSION = 1.0.5
 SNAP_FILE = $(SNAP_NAME)_$(VERSION)_amd64.snap
 
 help:

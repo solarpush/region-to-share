@@ -1,0 +1,43 @@
+include README.md
+include LICENSE
+include SYSTEM_DEPENDENCIES.md
+include requirements.txt
+include requirements-dev.txt
+include pyproject.toml
+include setup.py
+include Makefile
+
+# Application icons and desktop files
+include *.png
+include *.svg
+include *.desktop
+
+# Snap packaging
+include snapcraft.yaml
+
+# Scripts
+include *.sh
+
+# Documentation
+recursive-include docs *
+
+# Tests (if they exist)
+recursive-include tests *
+recursive-include test *
+
+# Exclude development and build artifacts
+global-exclude *.pyc
+global-exclude *.pyo
+global-exclude *.pyd
+global-exclude __pycache__
+global-exclude .pytest_cache
+global-exclude .mypy_cache
+global-exclude *.egg-info
+global-exclude .tox
+global-exclude .coverage
+global-exclude .git*
+global-exclude *.snap
+
+# Exclude virtual environments
+global-exclude venv_*
+global-exclude .venv*

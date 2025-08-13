@@ -1,6 +1,6 @@
 name: region-to-share
 base: core22
-version: '1.0.4'
+version: '1.0.5'
 summary: Share selected screen regions - perfect for ultrawide screens
 description: |
   Region-to-Share allows you to select a specific area of your screen
@@ -12,15 +12,20 @@ description: |
   - Real-time display window (30 FPS)
   - Compatible with all video conferencing applications
   - Perfect solution for ultrawide screens and multi-monitor setups
+  - Automatic fallback: Mutter ScreenCast → grim → MSS
   - Simple and intuitive interface
   - Pause/resume capture
   - Automatic update on screen changes
   
-  Ideal for ultrawide monitor users who want to share only a portion 
-  of their screen without showing their entire workspace.
+  Optimized for GNOME 46 Wayland with breakthrough PipeWire integration
+  delivering professional-grade performance for ultrawide monitor users.
 
-grade: stable
-confinement: strict
+grade: devel
+confinement: devmode
+
+plugs:
+  screencast-legacy:
+    interface: screencast-legacy
 website: https://github.com/solarpush/region-to-share/blob/main/README.md
 issues: https://github.com/solarpush/region-to-share/issues
 source-code: https://github.com/solarpush/region-to-share
@@ -42,38 +47,88 @@ apps:
       - unity7
       - home
       - network
+      - system-observe
+      - process-control
+      - hardware-observe
+      - screencast-legacy  # For Mutter ScreenCast access
+    environment:
+      # D-Bus access for Mutter ScreenCast
+      DBUS_SESSION_BUS_ADDRESS: $DBUS_SESSION_BUS_ADDRESS
 
 parts:
   region-to-share:
     plugin: python
     source: .
     source-type: local
-    python-requirements:
-      - requirements.txt
+    python-packages:
+      - PyQt5==5.15.11
+      - numpy==2.2.6
+      - dbus-python==1.3.2
+      - mss==10.0.0
+      - opencv-python-headless==4.12.0.88
+      - pycairo
     build-packages:
       - python3-dev
       - python3-pip
+      - python3-setuptools
+      - python3-wheel
+      - pkg-config
+      - libdbus-1-dev
+      - libdbus-glib-1-dev
       - libx11-dev
       - libxext-dev
       - libxrandr-dev
       - libxss-dev
+      - libqt5x11extras5-dev
+      - libgstreamer1.0-dev
+      - libgstreamer-plugins-base1.0-dev
+      - libgirepository1.0-dev
       - libglib2.0-dev
-      - libgtk-3-dev
-      - pkg-config
-      - python3-pyqt5
+      - libcairo2-dev
     stage-packages:
+      # Python core
       - python3
-      - python3-venv
-      - python3-pip
-      - python3-pyqt5
-      - python3-opencv
-      - python3-numpy
+      - python3-gi
+      - python3-gi-cairo
+      - python3-dbus
+      
+      # PipeWire et GStreamer pour la capture optimisée
+      - pipewire
+      - libpipewire-0.3-0
+      - gstreamer1.0-tools
+      - gstreamer1.0-plugins-base
+      - gstreamer1.0-plugins-good
+      - gstreamer1.0-plugins-bad
+      - gstreamer1.0-plugins-ugly
+      - libgstreamer1.0-0
+      - libgstreamer-plugins-base1.0-0
+      - libgstreamer-plugins-good1.0-0
+      
+      # D-Bus pour l'interface Mutter ScreenCast
+      - dbus
+      - libdbus-1-3
+      - libdbus-glib-1-2
+      
+      # Qt5 pour PyQt5
       - libqt5core5a
       - libqt5gui5
       - libqt5widgets5
       - libqt5x11extras5
-      - qt5-gtk-platformtheme
       - libqt5dbus5
+      - qt5-gtk-platformtheme
+      
+      # GObject Introspection pour D-Bus Python
+      - gir1.2-gtk-3.0
+      - gir1.2-glib-2.0
+      - gir1.2-gstreamer-1.0
+      - gir1.2-gst-plugins-base-1.0
+      - libgirepository-1.0-1
+      
+      # Dépendances système X11/Wayland
+      - libx11-6
+      - libxrandr2
+      - libxss1
+      - libwayland-client0
       - libxcb-xinerama0
       - libxcb-icccm4
       - libxcb-image0
@@ -81,39 +136,46 @@ parts:
       - libxcb-randr0
       - libxcb-render-util0
       - libxcb-xkb1
+      
+      # Outils fallback
+      - grim
+      - slurp
     override-pull: |
       craftctl default
-      # Remove local virtual environment to avoid external symlinks
-      rm -rf $CRAFT_PART_SRC/venv_region
-      # Also remove any potential __pycache__ directories
+      # Nettoyage des environnements virtuels locaux
+      rm -rf $CRAFT_PART_SRC/venv_region* || true
       find $CRAFT_PART_SRC -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
       find $CRAFT_PART_SRC -name "*.pyc" -delete 2>/dev/null || true
     override-build: |
       craftctl default
-      # Ensure no virtual environment is included
-      rm -rf $CRAFT_PART_SRC/venv_region* || true
+      
+      # Copie du code source dans l'environnement Python du snap
+      mkdir -p $CRAFT_PART_INSTALL/lib/python3.10/site-packages/region_to_share
+      cp -r region_to_share/* $CRAFT_PART_INSTALL/lib/python3.10/site-packages/region_to_share/
+      
+      # Création du script d'exécution optimisé
       mkdir -p $CRAFT_PART_INSTALL/bin
-      cat > $CRAFT_PART_INSTALL/bin/region-to-share << 'EOF'
+      cat > $CRAFT_PART_INSTALL/bin/region-to-share << 'SCRIPT_EOF'
       #!/bin/bash
-      cd $SNAP
-      export PYTHONPATH="$SNAP/lib/python3.10/site-packages:$SNAP/usr/lib/python3/dist-packages"
-      
-      # Qt5 configuration for PyQt5
+      export PYTHONPATH="$SNAP/lib/python3.10/site-packages:$SNAP/usr/lib/python3/dist-packages:$PYTHONPATH"
       export QT_PLUGIN_PATH="$SNAP/lib/python3.10/site-packages/PyQt5/Qt5/plugins:$SNAP/usr/lib/x86_64-linux-gnu/qt5/plugins"
-      export QT_QPA_PLATFORM_PLUGIN_PATH="$SNAP/lib/python3.10/site-packages/PyQt5/Qt5/plugins/platforms"
-      export LD_LIBRARY_PATH="$SNAP/lib/python3.10/site-packages/PyQt5/Qt5/lib:$LD_LIBRARY_PATH"
-      export QT_XKB_CONFIG_ROOT="$SNAP/usr/share/X11/xkb"
-      export QTWEBENGINE_DISABLE_SANDBOX=1
-      export QT_QPA_PLATFORM=xcb
-      
-      # Fallback to other platforms if xcb fails
       export QT_QPA_PLATFORM_PLUGIN_PATH="$SNAP/lib/python3.10/site-packages/PyQt5/Qt5/plugins/platforms:$SNAP/usr/lib/x86_64-linux-gnu/qt5/plugins/platforms"
-      
-      # Other environment variables
+      export LD_LIBRARY_PATH="$SNAP/lib/python3.10/site-packages/PyQt5/Qt5/lib:$SNAP/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH"
+      export QT_XKB_CONFIG_ROOT="$SNAP/usr/share/X11/xkb"
+      export GST_PLUGIN_PATH="$SNAP/usr/lib/x86_64-linux-gnu/gstreamer-1.0:$GST_PLUGIN_PATH"
+      export GST_PLUGIN_SYSTEM_PATH="$SNAP/usr/lib/x86_64-linux-gnu/gstreamer-1.0"
+      export GI_TYPELIB_PATH="$SNAP/usr/lib/x86_64-linux-gnu/girepository-1.0:$SNAP/usr/lib/girepository-1.0:$GI_TYPELIB_PATH"
+      export PIPEWIRE_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp}"
+      export PIPEWIRE_CONFIG_DIR="$SNAP/usr/share/pipewire"
       export XDG_DATA_DIRS="$SNAP/usr/share:$XDG_DATA_DIRS"
+      export QT_QPA_PLATFORM="xcb"
+      export QTWEBENGINE_DISABLE_SANDBOX=1
       
+      # Assurer que les subprocess Python utilisent les mêmes variables d'environnement
+      export SNAP_FOR_SUBPROCESS="$SNAP"
+      cd "$SNAP"
       exec python3 -m region_to_share.main "$@"
-      EOF
+      SCRIPT_EOF
       chmod +x $CRAFT_PART_INSTALL/bin/region-to-share
 
   desktop-file:
@@ -121,5 +183,8 @@ parts:
     source: .
     organize:
       region-to-share.desktop: usr/share/applications/region-to-share.desktop
+      region-to-share-64.png: usr/share/icons/hicolor/64x64/apps/region-to-share.png
+      region-to-share-128.png: usr/share/icons/hicolor/128x128/apps/region-to-share.png
+      region-to-share-512.png: usr/share/icons/hicolor/512x512/apps/region-to-share.png
+      region-to-share.svg: usr/share/icons/hicolor/scalable/apps/region-to-share.svg
       region-to-share.png: usr/share/pixmaps/region-to-share.png
-   
