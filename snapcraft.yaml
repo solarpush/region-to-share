@@ -6,31 +6,24 @@ description: |
   Region-to-Share allows you to select a specific area of your screen
   and display it in a window that you can share directly 
   in your video conferencing applications (Google Meet, Teams, Discord, etc.).
-  
+
   Features:
-  - Interactive screen region selection
-  - Real-time display window (30 FPS)
-  - Compatible with all video conferencing applications
-  - Perfect solution for ultrawide screens and multi-monitor setups
-  - Automatic fallback: Mutter ScreenCast → grim → MSS
-  - Simple and intuitive interface
+  - Interactive screen region selection (Wayland has blank screen issue)
+  - Real-time display window (target 30 FPS)
+  - Wayland via xdg-desktop-portal/PipeWire (>=1.0.5)
+  - X11 via MSS
   - Pause/resume capture
-  - Automatic update on screen changes
-  
-  Optimized for GNOME 46 Wayland with breakthrough PipeWire integration
-  delivering professional-grade performance for ultrawide monitor users.
+  - Auto update on screen changes
 
-grade: devel
-confinement: devmode
+grade: stable
+confinement: strict
 
-plugs:
-  screencast-legacy:
-    interface: screencast-legacy
 website: https://github.com/solarpush/region-to-share/blob/main/README.md
 issues: https://github.com/solarpush/region-to-share/issues
 source-code: https://github.com/solarpush/region-to-share
-donation: 
+donation:
   - https://coff.ee/solarpush
+
 architectures:
   - build-on: amd64
 
@@ -38,22 +31,18 @@ apps:
   region-to-share:
     command: bin/region-to-share
     desktop: usr/share/applications/region-to-share.desktop
-    extensions: [gnome]
+    extensions: [gnome]   # gnome-42 runtime on core22
     plugs:
-      - desktop
-      - desktop-legacy
-      - wayland
-      - x11
-      - unity7
+      - desktop                # portals access
+      - wayland                # Wayland socket
+      - x11                    # optional fallback on X11
+      - screen-inhibit-control
       - home
       - network
-      - system-observe
-      - process-control
-      - hardware-observe
-      - screencast-legacy  # For Mutter ScreenCast access
     environment:
-      # D-Bus access for Mutter ScreenCast
-      DBUS_SESSION_BUS_ADDRESS: $DBUS_SESSION_BUS_ADDRESS
+      # Prefer Wayland, fall back to X11 if needed
+      QT_QPA_PLATFORM: "wayland;xcb"
+      QTWEBENGINE_DISABLE_SANDBOX: "1"
 
 parts:
   region-to-share:
@@ -67,6 +56,10 @@ parts:
       - mss==10.0.0
       - opencv-python-headless==4.12.0.88
       - pycairo
+      - Pillow
+      - pyscreenshot
+      - python-xlib
+      - six
     build-packages:
       - python3-dev
       - python3-pip
@@ -86,45 +79,39 @@ parts:
       - libglib2.0-dev
       - libcairo2-dev
     stage-packages:
-      # Python core
+      # Python runtime
       - python3
       - python3-gi
       - python3-gi-cairo
       - python3-dbus
-      
-      # PipeWire et GStreamer pour la capture optimisée
-      - pipewire
+
+      # PipeWire client (daemon provided by host)
       - libpipewire-0.3-0
-      - gstreamer1.0-tools
+
+      # GStreamer (keep minimal; add good/bad/ugly only if required)
+      - libgstreamer1.0-0
       - gstreamer1.0-plugins-base
       - gstreamer1.0-plugins-good
-      - gstreamer1.0-plugins-bad
-      - gstreamer1.0-plugins-ugly
-      - libgstreamer1.0-0
-      - libgstreamer-plugins-base1.0-0
-      - libgstreamer-plugins-good1.0-0
       
-      # D-Bus pour l'interface Mutter ScreenCast
-      - dbus
-      - libdbus-1-3
-      - libdbus-glib-1-2
-      
-      # Qt5 pour PyQt5
+      # GStreamer PipeWire plugin - ESSENTIEL pour pipewiresrc
+      - gstreamer1.0-pipewire
+
+      # Qt5 for PyQt5
       - libqt5core5a
       - libqt5gui5
       - libqt5widgets5
       - libqt5x11extras5
       - libqt5dbus5
       - qt5-gtk-platformtheme
-      
-      # GObject Introspection pour D-Bus Python
+
+      # GObject Introspection (dbus-python/gi)
       - gir1.2-gtk-3.0
       - gir1.2-glib-2.0
       - gir1.2-gstreamer-1.0
       - gir1.2-gst-plugins-base-1.0
       - libgirepository-1.0-1
-      
-      # Dépendances système X11/Wayland
+
+      # System deps X11/Wayland
       - libx11-6
       - libxrandr2
       - libxss1
@@ -136,24 +123,19 @@ parts:
       - libxcb-randr0
       - libxcb-render-util0
       - libxcb-xkb1
-      
-      # Outils fallback
-      - grim
-      - slurp
     override-pull: |
       craftctl default
-      # Nettoyage des environnements virtuels locaux
       rm -rf $CRAFT_PART_SRC/venv_region* || true
       find $CRAFT_PART_SRC -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
       find $CRAFT_PART_SRC -name "*.pyc" -delete 2>/dev/null || true
     override-build: |
       craftctl default
-      
-      # Copie du code source dans l'environnement Python du snap
+
+      # Install package code into the snap's Python path
       mkdir -p $CRAFT_PART_INSTALL/lib/python3.10/site-packages/region_to_share
       cp -r region_to_share/* $CRAFT_PART_INSTALL/lib/python3.10/site-packages/region_to_share/
-      
-      # Création du script d'exécution optimisé
+
+      # Runtime launcher
       mkdir -p $CRAFT_PART_INSTALL/bin
       cat > $CRAFT_PART_INSTALL/bin/region-to-share << 'SCRIPT_EOF'
       #!/bin/bash
@@ -165,14 +147,12 @@ parts:
       export GST_PLUGIN_PATH="$SNAP/usr/lib/x86_64-linux-gnu/gstreamer-1.0:$GST_PLUGIN_PATH"
       export GST_PLUGIN_SYSTEM_PATH="$SNAP/usr/lib/x86_64-linux-gnu/gstreamer-1.0"
       export GI_TYPELIB_PATH="$SNAP/usr/lib/x86_64-linux-gnu/girepository-1.0:$SNAP/usr/lib/girepository-1.0:$GI_TYPELIB_PATH"
-      export PIPEWIRE_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp}"
-      export PIPEWIRE_CONFIG_DIR="$SNAP/usr/share/pipewire"
-      export XDG_DATA_DIRS="$SNAP/usr/share:$XDG_DATA_DIRS"
-      export QT_QPA_PLATFORM="xcb"
-      export QTWEBENGINE_DISABLE_SANDBOX=1
-      
-      # Assurer que les subprocess Python utilisent les mêmes variables d'environnement
-      export SNAP_FOR_SUBPROCESS="$SNAP"
+
+      # Prefer Wayland, fallback X11
+      if [ -z "$QT_QPA_PLATFORM" ]; then
+        export QT_QPA_PLATFORM="wayland;xcb"
+      fi
+
       cd "$SNAP"
       exec python3 -m region_to_share.main "$@"
       SCRIPT_EOF

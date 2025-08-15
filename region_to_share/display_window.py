@@ -57,7 +57,7 @@ class DisplayWindow(QWidget):
         self.is_capturing = True
         self.capture_timer = QTimer()
         self.capture_mode = capture_mode
-
+        self.session_type = os.environ.get("XDG_SESSION_TYPE", "").lower()
         # Create universal capture instance with forced mode if specified
         self.capturer = create_capture(capture_mode=capture_mode)
 
@@ -149,6 +149,12 @@ class DisplayWindow(QWidget):
         )
         self.pause_btn.clicked.connect(self.toggle_capture)
 
+        self.minimize_btn = QPushButton("🗕")
+        self.minimize_btn.setFixedSize(25, 25)
+        self.minimize_btn.setStyleSheet(self.pause_btn.styleSheet())
+        self.minimize_btn.setToolTip("Minimize window")
+        self.minimize_btn.clicked.connect(self.showMinimized)
+
         self.refresh_btn = QPushButton("🔄")
         self.refresh_btn.setFixedSize(25, 25)
         self.refresh_btn.setStyleSheet(self.pause_btn.styleSheet())
@@ -164,41 +170,21 @@ class DisplayWindow(QWidget):
         control_layout.addWidget(self.status_label)
         control_layout.addStretch()
         control_layout.addWidget(self.pause_btn)
-        control_layout.addWidget(self.refresh_btn)
+        control_layout.addWidget(self.minimize_btn)
         control_layout.addWidget(self.close_btn)
+        if self.session_type == "x11":
+            # add refreshButton (not supported by wayland)
+            control_layout.addWidget(self.refresh_btn)
 
         # Position bar at top of window
         self.control_bar.move(5, 5)
         self.control_bar.resize(self.width() - 10, 35)
-
-        # Instruction at bottom (hidden by default)
-        self.instruction_label = QLabel("Hover over the control bar to see options")
-        self.instruction_label.setStyleSheet(
-            """
-            QLabel {
-                background-color: rgba(0, 0, 0, 180);
-                color: white;
-                font-size: 10px;
-                padding: 5px 10px;
-                border-radius: 5px;
-            }
-        """
-        )
-        self.instruction_label.adjustSize()
-        self.instruction_label.move(
-            5, self.height() - self.instruction_label.height() - 5
-        )
-        self.instruction_label.hide()  # Hidden by default
 
     def resizeEvent(self, event):
         """Reposition controls when resizing"""
         super().resizeEvent(event)
         if hasattr(self, "control_bar"):
             self.control_bar.resize(self.width() - 10, 35)
-        if hasattr(self, "instruction_label"):
-            self.instruction_label.move(
-                5, self.height() - self.instruction_label.height() - 5
-            )
 
     def center_window(self):
         """Centers the window on screen"""
@@ -369,16 +355,12 @@ class DisplayWindow(QWidget):
         """Show controls on hover"""
         if hasattr(self, "control_bar"):
             self.control_bar.show()
-        if hasattr(self, "instruction_label"):
-            self.instruction_label.show()
         super().enterEvent(event)
 
     def leaveEvent(self, event):
         """Hide controls when mouse leaves"""
         if hasattr(self, "control_bar"):
             self.control_bar.hide()
-        if hasattr(self, "instruction_label"):
-            self.instruction_label.hide()
         super().leaveEvent(event)
 
     # def closeEvent(self, a0):

@@ -88,16 +88,15 @@ def main():
         description="Region-to-Share: Select and share screen regions for video conferencing",
         epilog="Examples:\n"
         "  region-to-share                    # Auto-detect best method\n"
-        "  region-to-share --mode mss         # Force MSS capture\n"
-        "  region-to-share --mode grim        # Force grim capture\n"
-        "  region-to-share --mode mutter-screencast  # Force Mutter ScreenCast\n",
+        "  region-to-share --mode portal-screencast  # Force Portal ScreenCast\n"
+        "  region-to-share --mode mss         # Force MSS capture\n",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
     parser.add_argument(
         "--mode",
         "--capture-mode",
-        choices=["auto", "mutter-screencast", "grim", "mss"],
+        choices=["auto", "portal-screencast", "mss"],
         default="auto",
         help="Force a specific capture method (default: auto-detect)",
     )

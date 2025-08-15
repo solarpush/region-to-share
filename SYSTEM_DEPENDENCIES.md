@@ -58,7 +58,7 @@ sudo pacman -S \
 
 - **PyGObject/GI**: Required for GStreamer integration but not available via pip
 - **PipeWire**: Essential for Wayland screen capture on modern systems
-- **D-Bus**: System message bus for GNOME Mutter ScreenCast API
+- **D-Bus**: System message bus for XDG Portal ScreenCast API
 - **GStreamer**: Media framework for video processing
 
 ## Verification

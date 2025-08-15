@@ -10,7 +10,8 @@ import subprocess
 import shutil
 import time
 from typing import Optional
-from PyQt5.QtGui import QPixmap, QImage
+from PyQt5.QtGui import QPixmap, QImage, QPainter, QColor, QCursor, QPolygon
+from PyQt5.QtCore import QPoint
 import numpy as np
 
 try:
@@ -21,22 +22,16 @@ except ImportError:
     HAS_MSS = False
 
 try:
-    from region_to_share.mutter_screencast import (
-        MutterScreenCastFast as MutterScreenCastOptimized,
-        test_mutter_availability,
-    )
+    from region_to_share.portal_screencast import PortalScreenCast
 
-    HAS_MUTTER = True
+    HAS_PORTAL = True
 except ImportError:
     try:
-        from .mutter_screencast import (
-            MutterScreenCastFast as MutterScreenCastOptimized,
-            test_mutter_availability,
-        )
+        from .portal_screencast import PortalScreenCast
 
-        HAS_MUTTER = True
+        HAS_PORTAL = True
     except ImportError:
-        HAS_MUTTER = False
+        HAS_PORTAL = False
 
 
 class UniversalCapture:
@@ -48,7 +43,7 @@ class UniversalCapture:
 
         Args:
             capture_mode (str, optional): Force a specific capture method.
-                Options: 'mutter-screencast', 'grim', 'mss', 'auto'
+                Options: 'portal-screencast', 'mss', 'auto'
         """
         self.forced_mode = capture_mode
         if capture_mode and capture_mode != "auto":
@@ -59,63 +54,93 @@ class UniversalCapture:
             print(f"🎯 Using capture method: {self.capture_method}")
 
         self._temp_files = []
-        self._mutter_screencast = None
+        self._portal_screencast = None
+        self._draw_cursor = (
+            self.capture_method != "portal-screencast"
+        )  # Portal doesn't support cursor drawing
+
+    def _draw_cursor_on_pixmap(
+        self, pixmap: QPixmap, region_x: int, region_y: int
+    ) -> QPixmap:
+        """Dessine le curseur sur le pixmap aux coordonnées relatives à la région"""
+        if not self._draw_cursor:
+            return pixmap
+
+        try:
+            # Obtenir la position actuelle du curseur
+            cursor_pos = QCursor.pos()
+
+            # Calculer la position relative dans la région capturée
+            relative_x = cursor_pos.x() - region_x
+            relative_y = cursor_pos.y() - region_y
+
+            # Vérifier si le curseur est dans la région
+            if 0 <= relative_x <= pixmap.width() and 0 <= relative_y <= pixmap.height():
+                # Créer un painter pour dessiner sur le pixmap
+                painter = QPainter(pixmap)
+                painter.setRenderHint(QPainter.Antialiasing)
+
+                # Dessiner une flèche de curseur simple
+                cursor_size = 16
+
+                # Couleur du curseur (blanc avec bordure noire)
+                painter.setPen(QColor(0, 0, 0, 200))  # Bordure noire
+                painter.setBrush(QColor(255, 255, 255, 220))  # Remplissage blanc
+
+                # Dessiner la forme de flèche du curseur
+                points = [
+                    (relative_x, relative_y),
+                    (relative_x, relative_y + cursor_size),
+                    (relative_x + cursor_size // 3, relative_y + cursor_size * 2 // 3),
+                    (
+                        relative_x + cursor_size // 2,
+                        relative_y + cursor_size * 2 // 3 + 2,
+                    ),
+                    (relative_x + cursor_size // 2, relative_y + cursor_size // 2),
+                    (
+                        relative_x + cursor_size * 2 // 3,
+                        relative_y + cursor_size * 2 // 3,
+                    ),
+                    (relative_x + cursor_size, relative_y + cursor_size // 2),
+                    (relative_x + cursor_size // 3, relative_y),
+                ]
+
+                # Convertir en QPolygon pour Qt
+                qt_points = [QPoint(int(x), int(y)) for x, y in points]
+                polygon = QPolygon(qt_points)
+
+                # Dessiner le polygone de la flèche
+                painter.drawPolygon(polygon)
+                painter.end()
+
+        except Exception as e:
+            print(f"Erreur lors du dessin du curseur: {e}")
+
+        return pixmap
 
     def _detect_best_method(self) -> str:
         """Detect the best capture method available"""
         session_type = os.environ.get("XDG_SESSION_TYPE", "").lower()
+        in_snap = bool(os.environ.get("SNAP"))
 
         if session_type == "wayland":
-            # On Wayland, detect compositor and use appropriate method
-            desktop_session = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
+            # En snap strict -> portail obligatoire
+            if in_snap:
+                return "portal-screencast"
 
-            if "gnome" in desktop_session:
-                # GNOME Wayland - try Mutter ScreenCast first (fastest), then grim fallback
-                if HAS_MUTTER and test_mutter_availability():
-                    return "mutter-screencast"
-                elif self._has_grim():
-                    return "grim"
-                else:
-                    print(
-                        "❌ GNOME Wayland detected but no screenshot method available"
-                    )
-                    return "none"
+            # Hors snap : portail préférable
+            if HAS_PORTAL:
+                return "portal-screencast"
             else:
-                # Other Wayland compositors - try grim
-                if self._has_grim():
-                    return "grim"
-                else:
-                    print(
-                        "❌ Wayland detected but no compatible screenshot tool available"
-                    )
-                    return "none"
+                print("❌ Wayland détecté mais aucune méthode compatible disponible")
+                return "none"
         else:
-            # On X11, prefer MSS for performance
+            # Sur X11, préfère MSS pour les performances
             if HAS_MSS and self._test_mss():
                 return "mss"
             else:
-                print("❌ X11 detected but MSS not working")
+                print("❌ X11 détecté mais MSS ne fonctionne pas")
                 return "none"
-
-    def _has_grim(self) -> bool:
-        """Check if grim is available (Wayland screenshot tool)"""
-        # First check system PATH
-        if shutil.which("grim") is not None:
-            return True
-
-        # Then check if we have an embedded grim (for snap)
-        snap_root = os.environ.get("SNAP", "")
-        if snap_root:
-            embedded_grim = os.path.join(snap_root, "bin", "grim")
-            if os.path.exists(embedded_grim) and os.access(embedded_grim, os.X_OK):
-                # Update PATH to include our embedded grim
-                current_path = os.environ.get("PATH", "")
-                grim_dir = os.path.dirname(embedded_grim)
-                if grim_dir not in current_path.split(":"):
-                    os.environ["PATH"] = f"{grim_dir}:{current_path}"
-                return True
-
-        return False
 
     def _test_mss(self) -> bool:
         """Test if MSS works"""
@@ -137,64 +162,60 @@ class UniversalCapture:
         try:
             # Validate forced mode availability
             if self.forced_mode and self.forced_mode != "auto":
-                if self.capture_method == "mutter-screencast" and not HAS_MUTTER:
+                if self.capture_method == "portal-screencast" and not HAS_PORTAL:
                     print(
-                        "❌ Mutter ScreenCast forced but not available (missing D-Bus or GNOME)"
-                    )
-                    return None
-                elif self.capture_method == "grim" and not self._has_grim():
-                    print(
-                        "❌ Grim forced but not available (install: sudo apt install grim)"
+                        "❌ Portail ScreenCast forcé mais non disponible (dépendances manquantes)"
                     )
                     return None
                 elif self.capture_method == "mss" and not HAS_MSS:
-                    print("❌ MSS forced but not available")
+                    print("❌ MSS forcé mais non disponible")
                     return None
 
-            if self.capture_method == "mutter-screencast":
-                return self._capture_mutter_screencast(x, y, width, height)
+            pixmap = None
+            if self.capture_method == "portal-screencast":
+                pixmap = self._capture_portal(x, y, width, height)
             elif self.capture_method == "mss":
-                return self._capture_mss(x, y, width, height)
-            elif self.capture_method == "grim":
-                return self._capture_grim(x, y, width, height)
+                pixmap = self._capture_mss(x, y, width, height)
             else:
-                print("❌ No capture method available")
+                print("❌ Aucune méthode de capture disponible")
                 return None
+
+            # Dessiner le curseur sur le pixmap si activé
+            if pixmap and self._draw_cursor:
+                pixmap = self._draw_cursor_on_pixmap(pixmap, x, y)
+
+            return pixmap
         except Exception as e:
-            print(f"❌ Capture failed: {e}")
+            print(f"❌ Échec capture: {e}")
             return None
 
-    def _capture_mutter_screencast(
+    def _capture_portal(
         self, x: int, y: int, width: int, height: int
     ) -> Optional[QPixmap]:
-        """Capture using GNOME Mutter ScreenCast (fastest for GNOME Wayland)"""
+        """Capture via portail XDG (compatible snap strict sous Wayland)"""
         try:
-            # Initialize Mutter ScreenCast if not already done
-            if not self._mutter_screencast:
-                self._mutter_screencast = MutterScreenCastOptimized()
-
-                # Initialize session
-                if not self._mutter_screencast.initialize_session():
-                    print("❌ Failed to initialize Mutter ScreenCast session")
+            if not self._portal_screencast:
+                self._portal_screencast = PortalScreenCast()
+                if not self._portal_screencast.start_area_capture(x, y, width, height):
+                    print("❌ Échec démarrage capture portail")
                     return None
+            else:
+                # Vérifier si la région a changé
+                if self._portal_screencast._region != (x, y, width, height):
+                    self._portal_screencast.cleanup()
+                    if not self._portal_screencast.start_area_capture(
+                        x, y, width, height
+                    ):
+                        print(
+                            "❌ Échec redémarrage capture portail pour nouvelle région"
+                        )
+                        return None
 
-            # Start area capture if region changed
-            current_region = getattr(self._mutter_screencast, "capture_region", None)
-            if current_region != (x, y, width, height):
-                if not self._mutter_screencast.start_area_capture(x, y, width, height):
-                    print("❌ Failed to start area capture")
-                    return None
-
-                # Give it a moment to initialize
-                time.sleep(0.1)
-
-            # Capture frame
-            return self._mutter_screencast.capture_frame()
+            return self._portal_screencast.capture_frame()
 
         except Exception as e:
-            print(f"Mutter ScreenCast capture failed: {e}")
-            # Fallback to grim
-            return self._capture_grim(x, y, width, height)
+            print(f"❌ Échec capture portail: {e}")
+            return None
 
     def _capture_mss(
         self, x: int, y: int, width: int, height: int
@@ -206,14 +227,17 @@ class UniversalCapture:
                 screenshot = sct.grab(region)
 
                 # Convert to numpy array then to QPixmap
-                img_array = np.array(screenshot)
-                # Convert BGRA to RGB
-                img_rgb = img_array[:, :, [2, 1, 0]]  # BGR to RGB
+                # Utiliser les données BGRA complètes pour garder le curseur
+                img_array = np.frombuffer(screenshot.bgra, dtype=np.uint8).copy()
+                img_array = img_array.reshape((screenshot.height, screenshot.width, 4))
+
+                # Convert BGRA to RGB (ignorer le canal alpha mais garder le curseur intégré)
+                img_rgb = img_array[:, :, [2, 1, 0]]  # BGR to RGB, ignore A
 
                 h, w, ch = img_rgb.shape
                 bytes_per_line = ch * w
                 qt_image = QImage(
-                    img_rgb.data, w, h, bytes_per_line, QImage.Format_RGB888
+                    img_rgb.data.tobytes(), w, h, bytes_per_line, QImage.Format_RGB888
                 )
 
                 return QPixmap.fromImage(qt_image)
@@ -221,38 +245,12 @@ class UniversalCapture:
             print(f"MSS capture failed: {e}")
             return None
 
-    def _capture_grim(
-        self, x: int, y: int, width: int, height: int
-    ) -> Optional[QPixmap]:
-        """Capture using grim (Wayland)"""
-        try:
-            # Create temporary file
-            temp_file = tempfile.mktemp(suffix=".png")
-            self._temp_files.append(temp_file)
-
-            # Use grim to capture specific region
-            geometry = f"{x},{y} {width}x{height}"
-            cmd = ["grim", "-g", geometry, temp_file]
-
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
-
-            if result.returncode == 0 and os.path.exists(temp_file):
-                pixmap = QPixmap(temp_file)
-                return pixmap
-            else:
-                print(f"grim failed: {result.stderr}")
-                return None
-
-        except Exception as e:
-            print(f"grim capture failed: {e}")
-            return None
-
     def cleanup(self):
         """Clean up temporary files"""
-        # Clean up Mutter ScreenCast if active
-        if self._mutter_screencast:
-            self._mutter_screencast.cleanup()
-            self._mutter_screencast = None
+        # Clean up Portal ScreenCast if active
+        if self._portal_screencast:
+            self._portal_screencast.cleanup()
+            self._portal_screencast = None
 
         # Clean up temp files
         for temp_file in self._temp_files:
@@ -274,6 +272,6 @@ def create_capture(capture_mode=None):
 
     Args:
         capture_mode (str, optional): Force a specific capture method.
-            Options: 'mutter-screencast', 'grim', 'mss', 'auto'
+            Options: 'portal-screencast', 'mss', 'auto'
     """
     return UniversalCapture(capture_mode=capture_mode)
