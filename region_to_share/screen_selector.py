@@ -4,6 +4,8 @@ Compatible with X11 and Wayland
 """
 
 import sys
+import os
+import tempfile
 from PyQt5.QtWidgets import (
     QWidget,
     QApplication,
@@ -13,10 +15,21 @@ from PyQt5.QtWidgets import (
     QPushButton,
     QRubberBand,
     QDesktopWidget,
+    QMessageBox,
 )
 from PyQt5.QtCore import Qt, QRect, QPoint, pyqtSignal
 from PyQt5.QtGui import QPainter, QPen, QColor, QPixmap, QScreen
 import mss
+
+# Import pyscreenshot as fallback for Wayland
+try:
+    import pyscreenshot as ImageGrab
+    from PIL import Image
+
+    HAS_PYSCREENSHOT = True
+except ImportError:
+    HAS_PYSCREENSHOT = False
+    print("⚠️  pyscreenshot not available")
 
 
 class ScreenSelector(QWidget):
@@ -74,18 +87,109 @@ class ScreenSelector(QWidget):
         self.rubber_band = QRubberBand(QRubberBand.Rectangle, self)
 
     def take_screenshot(self):
-        """Takes a screenshot of all monitors"""
+        """Takes a screenshot of all monitors - Wayland and X11 compatible"""
         try:
-            # Use Qt for screenshot (simpler and more reliable)
-            screen = QApplication.primaryScreen()
-            self.screenshot = screen.grabWindow(QApplication.desktop().winId())
-            print("✅ Screenshot successful")
+            # Method 1: Try pyscreenshot (works on both Wayland and X11)
+            if HAS_PYSCREENSHOT and self._try_pyscreenshot():
+                return
+
+            # Method 2: Try Qt method (works on X11, limited on Wayland)
+            if self._try_qt_screenshot():
+                return
+
+            # Method 3: Try MSS (usually works on X11)
+            if self._try_mss_screenshot():
+                return
+
+            # Fallback: no screenshot
+            self._fallback_no_screenshot()
 
         except Exception as e:
             print(f"Error taking screenshot: {e}")
-            # Fallback: black screenshot
-            self.screenshot = QPixmap(1920, 1080)
-            self.screenshot.fill(QColor(50, 50, 50))
+            self._fallback_no_screenshot()
+
+    def _try_pyscreenshot(self):
+        """Try pyscreenshot method (Wayland compatible)"""
+        try:
+            # Use pyscreenshot to capture the screen
+            im = ImageGrab.grab()
+
+            # Convert PIL Image to QPixmap
+            temp_file = tempfile.mktemp(suffix=".png")
+            im.save(temp_file, "PNG")  # type:ignore
+
+            self.screenshot = QPixmap(temp_file)
+            os.remove(temp_file)  # Clean up
+
+            if not self.screenshot.isNull():
+                print("✅ Screenshot successful (pyscreenshot)")
+                return True
+            else:
+                return False
+
+        except Exception as e:
+            print(f"pyscreenshot failed: {e}")
+            return False
+
+    def _try_mss_screenshot(self):
+        """Try MSS screenshot method"""
+        try:
+            with mss.mss() as sct:
+                # Get all monitors bounding box
+                monitor = sct.monitors[0]  # All monitors combined
+                screenshot = sct.grab(monitor)
+
+                # Convert to PIL Image then save and load as QPixmap
+                from PIL import Image
+
+                im = Image.frombytes(
+                    "RGB", screenshot.size, screenshot.bgra, "raw", "BGRX"
+                )
+
+                temp_file = tempfile.mktemp(suffix=".png")
+                im.save(temp_file, "PNG")
+
+                self.screenshot = QPixmap(temp_file)
+                os.remove(temp_file)  # Clean up
+
+                if not self.screenshot.isNull():
+                    print("✅ Screenshot successful (MSS)")
+                    return True
+                else:
+                    return False
+        except Exception as e:
+            print(f"MSS screenshot failed: {e}")
+            return False
+
+    def _try_qt_screenshot(self):
+        """Try Qt screenshot method"""
+        try:
+            screen = QApplication.primaryScreen()
+            self.screenshot = screen.grabWindow(QApplication.desktop().winId())
+            if not self.screenshot.isNull():
+                print("✅ Screenshot successful (Qt)")
+                return True
+            else:
+                print("Qt screenshot returned null pixmap")
+                return False
+        except Exception as e:
+            print(f"Qt screenshot failed: {e}")
+            return False
+
+    def _fallback_no_screenshot(self):
+        """Fallback: create a semi-transparent overlay without screenshot"""
+        print("⚠️  Screenshot not available, using transparent overlay")
+        # Create a small transparent pixmap
+        screen_geometry = QApplication.desktop().screenGeometry()
+        self.screenshot = QPixmap(screen_geometry.size())
+        self.screenshot.fill(QColor(20, 20, 20, 50))  # Dark semi-transparent
+
+        # Update instructions
+        self.instruction_label.setText(
+            "Screenshot not available on this system\n"
+            "Click and drag to select a screen region\n"
+            "Press Esc to cancel"
+        )
 
     def paintEvent(self, event):
         """Draws the screenshot as background"""

@@ -8,6 +8,7 @@ Compatible with X11 and Wayland
 import sys
 import os
 import signal
+import argparse
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtCore import QTimer
 
@@ -19,10 +20,11 @@ from region_to_share.display_window import DisplayWindow
 
 
 class RegionToShareApp:
-    def __init__(self):
+    def __init__(self, capture_mode=None):
         self.app = QApplication(sys.argv)
         self.screen_selector = None
         self.display_window = None
+        self.capture_mode = capture_mode
 
         # Gérer la fermeture propre
         signal.signal(signal.SIGINT, self.signal_handler)
@@ -63,8 +65,10 @@ class RegionToShareApp:
         """Callback called when a region is selected"""
         print(f"Region selected: x={x}, y={y}, width={width}, height={height}")
 
-        # Create display window
-        self.display_window = DisplayWindow(x, y, width, height)
+        # Create display window with forced capture mode if specified
+        self.display_window = DisplayWindow(
+            x, y, width, height, capture_mode=self.capture_mode
+        )
         self.display_window.closed.connect(self.cleanup)
         self.display_window.show()
 
@@ -80,7 +84,56 @@ class RegionToShareApp:
 
 def main():
     """Main entry point"""
-    app = RegionToShareApp()
+    parser = argparse.ArgumentParser(
+        description="Region-to-Share: Select and share screen regions for video conferencing",
+        epilog="Examples:\n"
+        "  region-to-share                    # Auto-detect best method\n"
+        "  region-to-share --mode portal-screencast  # Force Portal ScreenCast\n"
+        "  region-to-share --mode mss         # Force MSS capture\n",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+
+    parser.add_argument(
+        "--mode",
+        "--capture-mode",
+        choices=["auto", "portal-screencast", "mss"],
+        default="auto",
+        help="Force a specific capture method (default: auto-detect)",
+    )
+
+    parser.add_argument("--debug", action="store_true", help="Enable debug output")
+
+    parser.add_argument(
+        "--version",
+        action="version",
+        version="Region-to-Share 1.0.5 - High-performance screen region capture for GNOME Wayland",
+    )
+
+    # Parse arguments (excluding Qt arguments)
+    qt_args = []
+    our_args = []
+    for arg in sys.argv[1:]:
+        if (
+            arg.startswith("-style")
+            or arg.startswith("-platform")
+            or arg.startswith("-geometry")
+        ):
+            # Qt arguments - pass through
+            qt_args.append(arg)
+        else:
+            our_args.append(arg)
+
+    args = parser.parse_args(our_args)
+
+    # Set debug mode
+    if args.debug:
+        os.environ["REGION_TO_SHARE_DEBUG"] = "1"
+        print(f"🐛 Debug mode enabled")
+        print(f"🔧 Forced capture mode: {args.mode}")
+
+    # Create app with specified capture mode
+    capture_mode = None if args.mode == "auto" else args.mode
+    app = RegionToShareApp(capture_mode=capture_mode)
     return app.run()
 
 

@@ -3,6 +3,30 @@ Display window to show the selected region
 This window can be shared directly in video conferencing applications
 """
 
+import os
+import subprocess
+from PyQt5.QtWidgets import (
+    QWidget,
+    QVBoxLayout,
+    QLabel,
+    QPushButton,
+    QHBoxLayout,
+    QApplication,
+    QDesktopWidget,
+)
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QRect, QPoint
+from PyQt5.QtGui import QPixmap, QImage, QPainter, QColor, QFont, QCursor, QPolygon
+
+# Import our universal capture module
+from .universal_capture import create_capture
+import subprocess
+from PyQt5.QtWidgets import (
+    QWidget,
+    QVBoxLayout,
+    QLabel,
+    QPushButton,
+    QHBoxLayout,
+)
 from PyQt5.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -24,7 +48,7 @@ class DisplayWindow(QWidget):
 
     closed = pyqtSignal()
 
-    def __init__(self, x, y, width, height):
+    def __init__(self, x, y, width, height, capture_mode=None):
         super().__init__()
         self.region_x = x
         self.region_y = y
@@ -32,6 +56,11 @@ class DisplayWindow(QWidget):
         self.region_height = height
         self.is_capturing = True
         self.capture_timer = QTimer()
+        self.capture_mode = capture_mode
+        self.session_type = os.environ.get("XDG_SESSION_TYPE", "").lower()
+        # Create universal capture instance with forced mode if specified
+        self.capturer = create_capture(capture_mode=capture_mode)
+
         self.setup_ui()
         self.start_capture()
 
@@ -120,6 +149,12 @@ class DisplayWindow(QWidget):
         )
         self.pause_btn.clicked.connect(self.toggle_capture)
 
+        self.minimize_btn = QPushButton("🗕")
+        self.minimize_btn.setFixedSize(25, 25)
+        self.minimize_btn.setStyleSheet(self.pause_btn.styleSheet())
+        self.minimize_btn.setToolTip("Minimize window")
+        self.minimize_btn.clicked.connect(self.showMinimized)
+
         self.refresh_btn = QPushButton("🔄")
         self.refresh_btn.setFixedSize(25, 25)
         self.refresh_btn.setStyleSheet(self.pause_btn.styleSheet())
@@ -135,41 +170,21 @@ class DisplayWindow(QWidget):
         control_layout.addWidget(self.status_label)
         control_layout.addStretch()
         control_layout.addWidget(self.pause_btn)
-        control_layout.addWidget(self.refresh_btn)
+        control_layout.addWidget(self.minimize_btn)
         control_layout.addWidget(self.close_btn)
+        if self.session_type == "x11":
+            # add refreshButton (not supported by wayland)
+            control_layout.addWidget(self.refresh_btn)
 
         # Position bar at top of window
         self.control_bar.move(5, 5)
         self.control_bar.resize(self.width() - 10, 35)
-
-        # Instruction at bottom (hidden by default)
-        self.instruction_label = QLabel("Hover over the control bar to see options")
-        self.instruction_label.setStyleSheet(
-            """
-            QLabel {
-                background-color: rgba(0, 0, 0, 180);
-                color: white;
-                font-size: 10px;
-                padding: 5px 10px;
-                border-radius: 5px;
-            }
-        """
-        )
-        self.instruction_label.adjustSize()
-        self.instruction_label.move(
-            5, self.height() - self.instruction_label.height() - 5
-        )
-        self.instruction_label.hide()  # Hidden by default
 
     def resizeEvent(self, event):
         """Reposition controls when resizing"""
         super().resizeEvent(event)
         if hasattr(self, "control_bar"):
             self.control_bar.resize(self.width() - 10, 35)
-        if hasattr(self, "instruction_label"):
-            self.instruction_label.move(
-                5, self.height() - self.instruction_label.height() - 5
-            )
 
     def center_window(self):
         """Centers the window on screen"""
@@ -183,44 +198,72 @@ class DisplayWindow(QWidget):
         self.capture_timer.timeout.connect(self.capture_frame)
         self.capture_timer.start(33)  # ~30 FPS (33ms)
 
+    def _force_mss_x11_environment(self):
+        """Force MSS to use X11 even on Wayland session"""
+        if os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland":
+            # Ensure DISPLAY is set for X11
+            if not os.environ.get("DISPLAY"):
+                # Try common X11 display values
+                for display in [":0", ":1", ":10"]:
+                    os.environ["DISPLAY"] = display
+                    try:
+                        # Quick test if this display works
+                        import subprocess
+
+                        subprocess.run(
+                            ["xset", "q"],
+                            check=True,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                        )
+                        print(f"✅ Using X11 display: {display}")
+                        break
+                    except:
+                        continue
+                else:
+                    # Fallback to :0 if no test worked
+                    os.environ["DISPLAY"] = ":0"
+                    print("⚠️ Using fallback X11 display :0")
+
+            # Temporarily disable Wayland for MSS
+            self._original_wayland = os.environ.get("WAYLAND_DISPLAY")
+            if "WAYLAND_DISPLAY" in os.environ:
+                del os.environ["WAYLAND_DISPLAY"]
+
     def capture_frame(self):
-        """Captures and displays a frame of the region with manual cursor"""
+        """Captures and displays a frame of the region using universal capture"""
         if not self.is_capturing:
             return
 
         try:
-            # Capture region with mss
-            with mss.mss() as sct:
-                region = {
-                    "top": self.region_y,
-                    "left": self.region_x,
-                    "width": self.region_width,
-                    "height": self.region_height,
-                }
-                screenshot = sct.grab(region)
+            # Use universal capture to get the region
+            pixmap = self.capturer.capture_region(
+                self.region_x, self.region_y, self.region_width, self.region_height
+            )
 
-                # Convert to Qt format
-                img_array = np.array(screenshot)
-                img_rgb = cv2.cvtColor(img_array, cv2.COLOR_BGRA2RGB)
-
-                h, w, ch = img_rgb.shape
-                bytes_per_line = ch * w
-
-                qt_image = QImage(
-                    img_rgb.data, w, h, bytes_per_line, QImage.Format_RGB888
+            if pixmap and not pixmap.isNull():
+                # Display the captured region
+                self.display_label.setPixmap(
+                    pixmap.scaled(
+                        self.region_width,
+                        self.region_height,
+                        Qt.KeepAspectRatio,
+                        Qt.SmoothTransformation,
+                    )
                 )
-
-                # Create a pixmap and draw cursor on it
-                pixmap = QPixmap.fromImage(qt_image)
-
-                # Add cursor manually
-                pixmap_with_cursor = self.draw_cursor_on_pixmap(pixmap)
-
-                # Afficher le pixmap avec curseur
-                self.display_label.setPixmap(pixmap)
+            else:
+                self.display_label.setText("❌ Impossible de capturer l'écran")
 
         except Exception as e:
             self.display_label.setText(f"Erreur de capture: {e}")
+
+    def closeEvent(self, event):
+        """Cleanup on close"""
+        self.capture_timer.stop()
+        if hasattr(self, "capturer"):
+            self.capturer.cleanup()
+        self.closed.emit()
+        super().closeEvent(event)
 
     def draw_cursor_on_pixmap(self, pixmap):
         """Draws the cursor on the pixmap"""
@@ -254,9 +297,15 @@ class DisplayWindow(QWidget):
                     (relative_x, relative_y),
                     (relative_x, relative_y + cursor_size),
                     (relative_x + cursor_size // 3, relative_y + cursor_size * 2 // 3),
-                    (relative_x + cursor_size // 2, relative_y + cursor_size * 2 // 3 + 2),
+                    (
+                        relative_x + cursor_size // 2,
+                        relative_y + cursor_size * 2 // 3 + 2,
+                    ),
                     (relative_x + cursor_size // 2, relative_y + cursor_size // 2),
-                    (relative_x + cursor_size * 2 // 3, relative_y + cursor_size * 2 // 3),
+                    (
+                        relative_x + cursor_size * 2 // 3,
+                        relative_y + cursor_size * 2 // 3,
+                    ),
                     (relative_x + cursor_size, relative_y + cursor_size // 2),
                     (relative_x + cursor_size // 3, relative_y),
                 ]
@@ -306,20 +355,16 @@ class DisplayWindow(QWidget):
         """Show controls on hover"""
         if hasattr(self, "control_bar"):
             self.control_bar.show()
-        if hasattr(self, "instruction_label"):
-            self.instruction_label.show()
         super().enterEvent(event)
 
     def leaveEvent(self, event):
         """Hide controls when mouse leaves"""
         if hasattr(self, "control_bar"):
             self.control_bar.hide()
-        if hasattr(self, "instruction_label"):
-            self.instruction_label.hide()
         super().leaveEvent(event)
 
-    def closeEvent(self, a0):
-        """Cleanup on close"""
-        self.capture_timer.stop()
-        self.closed.emit()
-        super().closeEvent(a0)
+    # def closeEvent(self, a0):
+    #     """Cleanup on close"""
+    #     self.capture_timer.stop()
+    #     self.closed.emit()
+    #     super().closeEvent(a0)
