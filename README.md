@@ -1,5 +1,7 @@
 # Region to Share 📺
 
+[![region-to-share](https://snapcraft.io/region-to-share/badge.svg)](https://snapcraft.io/region-to-share)
+
 A simple and efficient Linux application for sharing specific areas of your screen in video calls (Google Meet, Teams, Discord, etc.).
 
 ## 🚀 Features
@@ -26,6 +28,29 @@ A simple and efficient Linux application for sharing specific areas of your scre
 - Python 3.8+
 - PyQt5 (installed automatically)
 
+## Usage
+
+```bash
+region-to-share --help #to display all supported commands
+
+#output
+usage: regiontoshare => main.py [-h] [--mode {auto,portal-screencast,mss}] [--debug] [--version]
+
+Region-to-Share: Select and share screen regions for video conferencing
+
+options:
+  -h, --help            show this help message and exit
+  --mode {auto,portal-screencast,mss}, --capture-mode {auto,portal-screencast,mss}
+                        Force a specific capture method (default: auto-detect)
+  --debug               Enable debug output
+  --version             show program's version number and exit
+
+Examples:
+  region-to-share                    # Auto-detect best method
+  region-to-share --mode portal-screencast  # Force Portal ScreenCast
+  region-to-share --mode mss         # Force MSS capture
+```
+
 ## 🔧 Installation
 
 ### Via Snap Store (recommended)
@@ -33,13 +58,6 @@ A simple and efficient Linux application for sharing specific areas of your scre
 ```bash
 # Install from Snap Store
 sudo snap install region-to-share
-```
-
-### Via local snap file
-
-```bash
-# Install from local snap file
-sudo snap install --dangerous region-to-share_1.0.0_amd64.snap
 ```
 
 ### From source code
@@ -51,10 +69,6 @@ cd region-to-share
 
 # Setup virtual environment
 ./run_venv.sh
-
-# Launch the application
-source venv_region/bin/activate
-python -m region_to_share.main
 ```
 
 ## 🎯 Usage
@@ -94,20 +108,21 @@ region_to_share/
 ### Technologies
 
 - **PyQt5**: Modern graphical interface
-- **mss**: High-performance screen capture
+- **mss**: High-performance screen capture (x11)
+- **xdg_portal**: wayland portal api (wayland)
 - **OpenCV + NumPy**: Efficient image processing
 - **Snapcraft**: Universal Linux packaging
 
 ## 📦 Snap Package
 
-### Building the snap
+### Building the snap (for try packing before send PR)
 
 ```bash
 # Install snapcraft
 sudo snap install snapcraft --classic
 
 # Build the snap
-snapcraft
+snapcraft #optional use --use-lxd
 
 # Install
 sudo snap install --devmode *.snap
@@ -120,6 +135,12 @@ sudo snap install --devmode *.snap
 3. Commit your changes
 4. Create a Pull Request
 
+You can extend capture support for different Linux desktop environments by editing `./region_to_share/universal_capture.py`.
+Currently supported XDG_SESSION_TYPE values:
+- `wayland`: Uses the `xdg-desktop-portal` API for screen capture. Ensure that the appropriate backend (e.g., `xdg-desktop-portal-kde` for KDE or `xdg-desktop-portal-gnome` for GNOME) is installed and running. Compatibility may vary depending on the compositor (e.g., KWin for KDE, Mutter for GNOME).
+- `x11`: Relies on the `mss` library for screen capture. This works well with most X11-based environments but may encounter issues with minimal window managers or restricted X11 configurations.
+
+Other session types (e.g. `mir`, `tty`) are not supported yet, but contributions are welcome! For example, adding support for `mir` would require implementing a Mir-specific API, and `tty` would need a different approach entirely.
 ## 📄 License
 
 MIT License - see the [LICENSE](LICENSE) file for details.
@@ -128,3 +149,5 @@ MIT License - see the [LICENSE](LICENSE) file for details.
 
 **Region to Share** - Simplified screen region sharing for Linux 🐧
 ````
+
+[![region-to-share](https://snapcraft.io/region-to-share/badge.svg)](https://snapcraft.io/region-to-share)
