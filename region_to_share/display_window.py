@@ -4,21 +4,30 @@ This window can be shared directly in video conferencing applications
 """
 
 import os
-import subprocess
 from PyQt5.QtWidgets import (
     QWidget,
     QVBoxLayout,
     QLabel,
     QPushButton,
     QHBoxLayout,
-    QApplication,
-    QDesktopWidget,
 )
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QRect, QPoint
-from PyQt5.QtGui import QPixmap, QImage, QPainter, QColor, QFont, QCursor, QPolygon
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QPoint
+from PyQt5.QtGui import (
+    QPainter,
+    QColor,
+    QCursor,
+    QPolygon,
+    QIcon,
+)
 
 # Import our universal capture module
 from .universal_capture import create_capture
+from .config import config
+
+# Import debug function from main
+from region_to_share.debug import debug_print
+
+
 import subprocess
 from PyQt5.QtWidgets import (
     QWidget,
@@ -33,14 +42,9 @@ from PyQt5.QtWidgets import (
     QLabel,
     QPushButton,
     QHBoxLayout,
-    QApplication,
-    QDesktopWidget,
 )
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QRect, QPoint
-from PyQt5.QtGui import QPixmap, QImage, QPainter, QColor, QFont, QCursor, QPolygon
-import mss
-import numpy as np
-import cv2
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QPoint
+from PyQt5.QtGui import QPainter, QColor, QCursor, QPolygon
 
 
 class DisplayWindow(QWidget):
@@ -48,7 +52,7 @@ class DisplayWindow(QWidget):
 
     closed = pyqtSignal()
 
-    def __init__(self, x, y, width, height, capture_mode=None):
+    def __init__(self, x, y, width, height, capture_mode=None, frame_rate=30):
         super().__init__()
         self.region_x = x
         self.region_y = y
@@ -57,12 +61,41 @@ class DisplayWindow(QWidget):
         self.is_capturing = True
         self.capture_timer = QTimer()
         self.capture_mode = capture_mode
+        self.frame_rate = frame_rate
+
+        # Calculate interval
+        interval_ms = int(1000 / frame_rate)
+
+        # Set high precision timer for high frame rates
+        if frame_rate > 60:
+            self.capture_timer.setTimerType(Qt.PreciseTimer)
+            if frame_rate > 240:
+                self.frame_rate = 240  # Limit to 240 FPS max
+                interval_ms = int(1000 / 240)
+                debug_print("Limiting frame rate to 240 FPS")
+            debug_print(
+                f"Using PreciseTimer for high frame rate ({self.frame_rate} FPS)"
+            )
+
+        if interval_ms < 8:  # Less than 8ms = over 125 FPS
+            debug_print(
+                f"Warning: Requested interval {interval_ms}ms is very low. Qt timer resolution may be limited."
+            )
+            debug_print("Consider using a lower frame rate for stable performance.")
+
         self.session_type = os.environ.get("XDG_SESSION_TYPE", "").lower()
         # Create universal capture instance with forced mode if specified
         self.capturer = create_capture(capture_mode=capture_mode)
 
+        # Set window icon
+        self.set_window_icon()
+
         self.setup_ui()
         self.start_capture()
+
+        # Apply default opacity from settings
+        default_opacity = config.get("window_opacity") or 1.0
+        self.setWindowOpacity(float(default_opacity))
 
     def setup_ui(self):
         """User interface configuration"""
@@ -124,6 +157,13 @@ class DisplayWindow(QWidget):
         # Information about the region
         self.region_info_label = QLabel(f"{self.region_width}×{self.region_height}")
 
+        # Performance stats (only visible when show_perf is enabled)
+        self.performance_label = QLabel("")
+        self.performance_label.setStyleSheet(
+            "QLabel { color: #FFC107; font-weight: bold; font-size: 9px; font-family: monospace; }"
+        )
+        self.performance_label.setVisible(False)  # Hidden by default
+
         # Capture status
         self.status_label = QLabel("🔴 Live")
         self.status_label.setStyleSheet(
@@ -152,8 +192,22 @@ class DisplayWindow(QWidget):
         self.minimize_btn = QPushButton("🗕")
         self.minimize_btn.setFixedSize(25, 25)
         self.minimize_btn.setStyleSheet(self.pause_btn.styleSheet())
-        self.minimize_btn.setToolTip("Minimize window")
-        self.minimize_btn.clicked.connect(self.showMinimized)
+        self.minimize_btn.setToolTip("Send to background")
+        self.minimize_btn.clicked.connect(self.send_to_background)
+
+        # Add transparency toggle button
+        self.transparency_btn = QPushButton("👁️")
+        self.transparency_btn.setFixedSize(25, 25)
+        self.transparency_btn.setStyleSheet(self.pause_btn.styleSheet())
+        self.transparency_btn.setToolTip("Toggle transparency")
+        self.transparency_btn.clicked.connect(self.toggle_transparency)
+
+        # Add settings button
+        self.settings_btn = QPushButton("⚙️")
+        self.settings_btn.setFixedSize(25, 25)
+        self.settings_btn.setStyleSheet(self.pause_btn.styleSheet())
+        self.settings_btn.setToolTip("Settings")
+        self.settings_btn.clicked.connect(self.open_settings)
 
         self.refresh_btn = QPushButton("🔄")
         self.refresh_btn.setFixedSize(25, 25)
@@ -168,9 +222,12 @@ class DisplayWindow(QWidget):
         # Add to layout
         control_layout.addWidget(self.region_info_label)
         control_layout.addWidget(self.status_label)
+        control_layout.addWidget(self.performance_label)
         control_layout.addStretch()
         control_layout.addWidget(self.pause_btn)
         control_layout.addWidget(self.minimize_btn)
+        control_layout.addWidget(self.transparency_btn)
+        control_layout.addWidget(self.settings_btn)
         control_layout.addWidget(self.close_btn)
         if self.session_type == "x11":
             # add refreshButton (not supported by wayland)
@@ -186,6 +243,37 @@ class DisplayWindow(QWidget):
         if hasattr(self, "control_bar"):
             self.control_bar.resize(self.width() - 10, 35)
 
+    def update_performance_display(self, stats_text):
+        """Update the performance display with new stats"""
+        if hasattr(self, "performance_label"):
+            self.performance_label.setText(stats_text[:52])
+
+    def set_performance_display_visible(self, visible):
+        """Show or hide the performance display"""
+        if hasattr(self, "performance_label"):
+            self.performance_label.setVisible(visible)
+
+    def set_window_icon(self):
+        """Set the window icon from the application icon"""
+        # Try different icon paths (snap, local dev, system)
+        icon_paths = [
+            "/snap/region-to-share/current/usr/share/icons/hicolor/64x64/apps/region-to-share.png",
+            "region-to-share-64.png",  # Local development
+            "region-to-share.png",
+            "/usr/share/icons/hicolor/64x64/apps/region-to-share.png",
+            "/usr/share/pixmaps/region-to-share.png",
+        ]
+
+        for icon_path in icon_paths:
+            if os.path.exists(icon_path):
+                icon = QIcon(icon_path)
+                if not icon.isNull():
+                    self.setWindowIcon(icon)
+                    debug_print(f"Window icon set from: {icon_path}")
+                    return
+
+        debug_print("Could not find application icon")
+
     def center_window(self):
         """Centers the window on screen"""
         screen = self.screen().availableGeometry()
@@ -196,7 +284,18 @@ class DisplayWindow(QWidget):
     def start_capture(self):
         """Starts periodic capture"""
         self.capture_timer.timeout.connect(self.capture_frame)
-        self.capture_timer.start(33)  # ~30 FPS (33ms)
+        # Calculate interval in milliseconds from frame rate
+        interval_ms = int(1000 / self.frame_rate)
+        self.capture_timer.start(interval_ms)
+        debug_print(
+            f"Capture started at {self.frame_rate} FPS ({interval_ms}ms interval)"
+        )
+
+        # Debug: Test actual timer resolution
+        if interval_ms < 10:
+            debug_print(
+                f"Warning: Requested interval {interval_ms}ms is very low. Qt timer resolution may be limited."
+            )
 
     def _force_mss_x11_environment(self):
         """Force MSS to use X11 even on Wayland session"""
@@ -216,14 +315,14 @@ class DisplayWindow(QWidget):
                             stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL,
                         )
-                        print(f"✅ Using X11 display: {display}")
+                        debug_print(f"Using X11 display: {display}")
                         break
                     except:
                         continue
                 else:
                     # Fallback to :0 if no test worked
                     os.environ["DISPLAY"] = ":0"
-                    print("⚠️ Using fallback X11 display :0")
+                    debug_print("Using fallback X11 display :0")
 
             # Temporarily disable Wayland for MSS
             self._original_wayland = os.environ.get("WAYLAND_DISPLAY")
@@ -242,6 +341,11 @@ class DisplayWindow(QWidget):
             )
 
             if pixmap and not pixmap.isNull():
+                # Mesurer le temps de peinture
+                from region_to_share.frame_profiler import prof_paint, now
+
+                t_paint_start = now()
+
                 # Display the captured region
                 self.display_label.setPixmap(
                     pixmap.scaled(
@@ -251,6 +355,9 @@ class DisplayWindow(QWidget):
                         Qt.SmoothTransformation,
                     )
                 )
+
+                t_paint_end = now()
+                prof_paint.push(t_paint_end - t_paint_start)
             else:
                 self.display_label.setText("❌ Impossible de capturer l'écran")
 
@@ -320,7 +427,7 @@ class DisplayWindow(QWidget):
                 painter.end()
 
         except Exception as e:
-            print(f"Erreur lors du dessin du curseur: {e}")
+            debug_print(f"Erreur lors du dessin du curseur: {e}")
 
     def toggle_capture(self):
         """Enables/disables capture"""
@@ -351,6 +458,49 @@ class DisplayWindow(QWidget):
         self.region_height = height
         self.region_info_label.setText(f"Region: {width}×{height} px")
 
+    def send_to_background(self):
+        """Send window to background instead of minimizing"""
+        # Lower the window (send to back)
+        self.lower()
+        # Also remove focus to make it less prominent
+        self.clearFocus()
+        debug_print("Window sent to background")
+
+    def toggle_transparency(self):
+        """Toggle window transparency to make it discreet"""
+        current_opacity = self.windowOpacity()
+        if current_opacity > 0.7:
+            # Make semi-transparent
+            self.setWindowOpacity(0.3)
+            self.transparency_btn.setText("👻")
+            self.transparency_btn.setToolTip("Make opaque")
+            debug_print("Window made transparent")
+        else:
+            # Make opaque
+            self.setWindowOpacity(1.0)
+            self.transparency_btn.setText("👁️")
+            self.transparency_btn.setToolTip("Toggle transparency")
+            debug_print("Window made opaque")
+
+    def open_settings(self):
+        """Open settings dialog"""
+        try:
+            from .settings_dialog import SettingsDialog
+
+            dialog = SettingsDialog(self)
+            if dialog.exec_() == SettingsDialog.Accepted:
+                debug_print("Settings saved!")
+                # Apply some settings immediately if needed
+                opacity = config.get("window_opacity") or 1.0
+                self.apply_opacity_mode(float(opacity))
+        except Exception as e:
+            debug_print(f"Error opening settings: {e}")
+
+    def apply_opacity_mode(self, opacity):
+        """Apply opacity"""
+        self.setWindowOpacity(opacity)
+        debug_print(f"Opacity set to {int(opacity * 100)}%")
+
     def enterEvent(self, event):
         """Show controls on hover"""
         if hasattr(self, "control_bar"):
@@ -362,9 +512,3 @@ class DisplayWindow(QWidget):
         if hasattr(self, "control_bar"):
             self.control_bar.hide()
         super().leaveEvent(event)
-
-    # def closeEvent(self, a0):
-    #     """Cleanup on close"""
-    #     self.capture_timer.stop()
-    #     self.closed.emit()
-    #     super().closeEvent(a0)

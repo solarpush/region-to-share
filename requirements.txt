@@ -1,30 +1,23 @@
-# Core GUI Framework
+# Core Dependencies (Production)
 PyQt5>=5.15.0
-PyQt5-stubs>=5.15.6.0
-
-# Screen Capture Libraries
 mss>=10.0.0
-opencv-python-headless>=4.12.0
-numpy>=2.0.0
-pyscreenshot>=3.1
-
-# Image Processing
-Pillow>=11.0.0
-
-# D-Bus Communication (Essential for XDG Portal ScreenCast)
 dbus-python>=1.3.0
+psutil>=5.9.0
 
-# System Integration  
-python-xlib>=0.33
+# Development Dependencies (optional)
+PyQt5-stubs>=5.15.6.0  # Type hints for IDE/mypy
 
-# Utilities
-six>=1.17.0
+# System Dependencies (install via system package manager, not pip):
+# - PyGObject (gi): Required for GStreamer/Portal integration
+#   Ubuntu/Debian: sudo apt install python3-gi python3-gi-cairo gir1.2-gstreamer-1.0
+#   Fedora: sudo dnf install python3-gobject python3-gobject-devel gstreamer1-python  
+#   Arch: sudo pacman -S python-gobject gstreamer python-gst
 
-# Cairo bindings (for advanced graphics if needed)
-pycairo>=1.28.0
-
-# Note: PyGObject/GI is required for GStreamer but typically installed system-wide
-# on GNOME systems. For development, install via system package manager:
-# Ubuntu/Debian: sudo apt install python3-gi python3-gi-cairo gir1.2-gstreamer-1.0
-# Fedora: sudo dnf install python3-gobject python3-gobject-devel gstreamer1-python  
-# Arch: sudo pacman -S python-gobject gstreamer python-gst
+# Previously included but REMOVED (unused in codebase):
+# - opencv-python-headless: No cv2 imports found
+# - numpy: No numpy imports found (only mentioned in comments)
+# - pycairo: No cairo imports found
+# - EasyProcess, entrypoint2, jeepney: Never imported
+# - pyscreenshot: Causes GTK conflicts in snap environments
+# - python-xlib, six: Completely unused
+# - Pillow: MSS now converts directly to QPixmap without PIL

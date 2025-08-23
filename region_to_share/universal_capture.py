@@ -4,15 +4,21 @@ Clean implementation focusing on what actually works
 """
 
 import os
-import sys
-import tempfile
-import subprocess
-import shutil
-import time
+
 from typing import Optional
 from PyQt5.QtGui import QPixmap, QImage, QPainter, QColor, QCursor, QPolygon
 from PyQt5.QtCore import QPoint
-import numpy as np
+
+from region_to_share.frame_profiler import (
+    prof_total,
+    prof_grab,
+    prof_qimg,
+    prof_qpx,
+    prof_paint,
+    now,
+    NO_CONV,
+)
+from region_to_share.debug import debug_print
 
 try:
     import mss
@@ -48,16 +54,19 @@ class UniversalCapture:
         self.forced_mode = capture_mode
         if capture_mode and capture_mode != "auto":
             self.capture_method = capture_mode
-            print(f"🔧 Forcing capture method: {self.capture_method}")
+            debug_print(f"🔧 Forcing capture method: {self.capture_method}")
         else:
             self.capture_method = self._detect_best_method()
-            print(f"🎯 Using capture method: {self.capture_method}")
+            debug_print(f"🎯 Using capture method: {self.capture_method}")
 
         self._temp_files = []
         self._portal_screencast = None
         self._draw_cursor = (
             self.capture_method != "portal-screencast"
         )  # Portal doesn't support cursor drawing
+
+        # For real FPS measurement
+        self._last_capture_time = None
 
     def _draw_cursor_on_pixmap(
         self, pixmap: QPixmap, region_x: int, region_y: int
@@ -114,7 +123,7 @@ class UniversalCapture:
                 painter.end()
 
         except Exception as e:
-            print(f"Erreur lors du dessin du curseur: {e}")
+            debug_print(f"Erreur lors du dessin du curseur: {e}")
 
         return pixmap
 
@@ -132,14 +141,16 @@ class UniversalCapture:
             if HAS_PORTAL:
                 return "portal-screencast"
             else:
-                print("❌ Wayland détecté mais aucune méthode compatible disponible")
+                debug_print(
+                    "❌ Wayland détecté mais aucune méthode compatible disponible"
+                )
                 return "none"
         else:
             # Sur X11, préfère MSS pour les performances
             if HAS_MSS and self._test_mss():
                 return "mss"
             else:
-                print("❌ X11 détecté mais MSS ne fonctionne pas")
+                debug_print("❌ X11 détecté mais MSS ne fonctionne pas")
                 return "none"
 
     def _test_mss(self) -> bool:
@@ -163,12 +174,12 @@ class UniversalCapture:
             # Validate forced mode availability
             if self.forced_mode and self.forced_mode != "auto":
                 if self.capture_method == "portal-screencast" and not HAS_PORTAL:
-                    print(
+                    debug_print(
                         "❌ Portail ScreenCast forcé mais non disponible (dépendances manquantes)"
                     )
                     return None
                 elif self.capture_method == "mss" and not HAS_MSS:
-                    print("❌ MSS forcé mais non disponible")
+                    debug_print("❌ MSS forcé mais non disponible")
                     return None
 
             pixmap = None
@@ -177,7 +188,7 @@ class UniversalCapture:
             elif self.capture_method == "mss":
                 pixmap = self._capture_mss(x, y, width, height)
             else:
-                print("❌ Aucune méthode de capture disponible")
+                debug_print("❌ Aucune méthode de capture disponible")
                 return None
 
             # Dessiner le curseur sur le pixmap si activé
@@ -186,7 +197,7 @@ class UniversalCapture:
 
             return pixmap
         except Exception as e:
-            print(f"❌ Échec capture: {e}")
+            debug_print(f"❌ Échec capture: {e}")
             return None
 
     def _capture_portal(
@@ -194,10 +205,19 @@ class UniversalCapture:
     ) -> Optional[QPixmap]:
         """Capture via portail XDG (compatible snap strict sous Wayland)"""
         try:
+            t0 = now()
+
+            # Mesurer le temps réel entre les captures
+            if self._last_capture_time is not None:
+                real_interval = t0 - self._last_capture_time
+                # Utiliser prof_total pour le temps réel entre captures
+                prof_total.push(real_interval)
+            self._last_capture_time = t0
+
             if not self._portal_screencast:
                 self._portal_screencast = PortalScreenCast()
                 if not self._portal_screencast.start_area_capture(x, y, width, height):
-                    print("❌ Échec démarrage capture portail")
+                    debug_print("❌ Échec démarrage capture portail")
                     return None
             else:
                 # Vérifier si la région a changé
@@ -206,15 +226,25 @@ class UniversalCapture:
                     if not self._portal_screencast.start_area_capture(
                         x, y, width, height
                     ):
-                        print(
+                        debug_print(
                             "❌ Échec redémarrage capture portail pour nouvelle région"
                         )
                         return None
 
-            return self._portal_screencast.capture_frame()
+            t1 = now()
+            pixmap = self._portal_screencast.capture_frame()
+            t2 = now()
+
+            # Mesurer les temps de capture (pas le temps total)
+            prof_grab.push(t1 - t0)  # Setup time
+            prof_qimg.push(0)  # Portal gère l'image en interne
+            prof_qpx.push(t2 - t1)  # Capture time
+            prof_paint.push(0)  # Pas de paint direct
+
+            return pixmap
 
         except Exception as e:
-            print(f"❌ Échec capture portail: {e}")
+            debug_print(f"❌ Échec capture portail: {e}")
             return None
 
     def _capture_mss(
@@ -222,31 +252,67 @@ class UniversalCapture:
     ) -> Optional[QPixmap]:
         """Capture using MSS (X11)"""
         try:
-            with mss.mss() as sct:
-                region = {"top": y, "left": x, "width": width, "height": height}
-                screenshot = sct.grab(region)
+            t0 = now()
 
-                # Convert to numpy array then to QPixmap
-                # Utiliser les données BGRA complètes pour garder le curseur
-                img_array = np.frombuffer(screenshot.bgra, dtype=np.uint8).copy()
-                img_array = img_array.reshape((screenshot.height, screenshot.width, 4))
+            # Mesurer le temps réel entre les captures
+            if self._last_capture_time is not None:
+                real_interval = t0 - self._last_capture_time
+                # Utiliser prof_total pour le temps réel entre captures
+                prof_total.push(real_interval)
+            self._last_capture_time = t0
 
-                # Convert BGRA to RGB (ignorer le canal alpha mais garder le curseur intégré)
-                img_rgb = img_array[:, :, [2, 1, 0]]  # BGR to RGB, ignore A
+            if not hasattr(self, "_sct"):
+                self._sct = mss.mss()
 
-                h, w, ch = img_rgb.shape
-                bytes_per_line = ch * w
-                qt_image = QImage(
-                    img_rgb.data.tobytes(), w, h, bytes_per_line, QImage.Format_RGB888
-                )
+            # Grab screen region
+            region = {"top": y, "left": x, "width": width, "height": height}
+            screenshot = self._sct.grab(region)
+            t1 = now()
 
-                return QPixmap.fromImage(qt_image)
+            # Convert to QImage using buffer persistant (optimisé)
+            bgra_size = width * height * 4
+            if not hasattr(self, "_qimage_buf") or len(self._qimage_buf) != bgra_size:
+                self._qimage_buf = bytearray(bgra_size)
+
+            # Copy directly to avoid intermediate allocations
+            self._qimage_buf[:] = screenshot.bgra
+
+            # Format natif BGRA pour éviter conversion
+            img = QImage(
+                self._qimage_buf,
+                width,
+                height,
+                width * 4,
+                QImage.Format_ARGB32,  # Format natif le plus proche
+            )
+            t2 = now()
+
+            # Créer un nouveau QPixmap à chaque fois (plus stable)
+            pixmap = QPixmap.fromImage(img, NO_CONV)
+            t3 = now()
+
+            # Mesurer seulement les temps de capture (pas le temps total qui est mesuré plus haut)
+            prof_grab.push(t1 - t0)
+            prof_qimg.push(t2 - t1)
+            prof_qpx.push(t3 - t2)
+            prof_paint.push(0)  # Pas de paint dans cette version
+
+            return pixmap  # Retourner directement le pixmap (pas de copie)
+
         except Exception as e:
-            print(f"MSS capture failed: {e}")
+            debug_print(f"MSS capture failed: {e}")
             return None
 
     def cleanup(self):
         """Clean up temporary files"""
+        # Clean up MSS instance
+        if hasattr(self, "_sct"):
+            try:
+                self._sct.close()
+            except Exception:
+                pass
+            delattr(self, "_sct")
+
         # Clean up Portal ScreenCast if active
         if self._portal_screencast:
             self._portal_screencast.cleanup()
