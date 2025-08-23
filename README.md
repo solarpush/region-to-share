@@ -62,7 +62,7 @@ sudo snap install region-to-share
 
 ### From source code
 
-````bash
+```bash
 # Clone the repository
 git clone https://github.com/solarpush/region-to-share.git
 cd region-to-share
@@ -141,13 +141,7 @@ Currently supported XDG_SESSION_TYPE values:
 - `x11`: Relies on the `mss` library for screen capture. This works well with most X11-based environments but may encounter issues with minimal window managers or restricted X11 configurations.
 
 Other session types (e.g. `mir`, `tty`) are not supported yet, but contributions are welcome! For example, adding support for `mir` would require implementing a Mir-specific API, and `tty` would need a different approach entirely.
+
 ## 📄 License
 
 MIT License - see the [LICENSE](LICENSE) file for details.
-
----
-
-**Region to Share** - Simplified screen region sharing for Linux 🐧
-````
-
-[![region-to-share](https://snapcraft.io/region-to-share/badge.svg)](https://snapcraft.io/region-to-share)
