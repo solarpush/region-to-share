@@ -34,7 +34,9 @@ A simple and efficient Linux application for sharing specific areas of your scre
 region-to-share --help #to display all supported commands
 
 #output
-usage: regiontoshare => main.py [-h] [--mode {auto,portal-screencast,mss}] [--debug] [--version]
+usage: main.py [-h] [--mode {auto,portal-screencast,mss}] [--debug] [--config] [--perf]
+               [--frame-rate FRAME_RATE] [--opacity OPACITY] [--auto-background] [--remember-region]
+               [--auto-use-region] [--version]
 
 Region-to-Share: Select and share screen regions for video conferencing
 
@@ -43,12 +45,25 @@ options:
   --mode {auto,portal-screencast,mss}, --capture-mode {auto,portal-screencast,mss}
                         Force a specific capture method (default: auto-detect)
   --debug               Enable debug output
+  --config              Open configuration dialog only (don't start capture)
+  --perf                Enable performance monitoring and display FPS/timing stats
+  --frame-rate FRAME_RATE, --fps FRAME_RATE
+                        Set maximum frame rate (FPS) for capture (default: from settings)
+  --opacity OPACITY     Set window opacity (0.1-1.0, default: from settings)
+  --auto-background     Automatically send window to background after capture starts
+  --remember-region     Remember and offer to reuse the last selected region
+  --auto-use-region     Automatically use the last region without asking (requires --remember-region)
   --version             show program's version number and exit
 
 Examples:
   region-to-share                    # Auto-detect best method
+  region-to-share --config           # Open settings dialog only
   region-to-share --mode portal-screencast  # Force Portal ScreenCast
   region-to-share --mode mss         # Force MSS capture
+  region-to-share --frame-rate 60    # Set 60 FPS capture
+  region-to-share --perf --fps 15    # 15 FPS with performance monitoring
+  region-to-share --opacity 0.5 --auto-background  # Semi-transparent, auto-background
+  region-to-share --remember-region --auto-use-region  # Reuse last region automatically
 ```
 
 ## 🔧 Installation
@@ -62,7 +77,7 @@ sudo snap install region-to-share
 
 ### From source code
 
-````bash
+```bash
 # Clone the repository
 git clone https://github.com/solarpush/region-to-share.git
 cd region-to-share
@@ -97,7 +112,7 @@ cd region-to-share
 
 ## 🛠️ Architecture
 
-```
+```txt
 region_to_share/
 ├── main.py              # Main entry point
 ├── screen_selector.py   # Interactive region selection
@@ -137,10 +152,12 @@ sudo snap install --devmode *.snap
 
 You can extend capture support for different Linux desktop environments by editing `./region_to_share/universal_capture.py`.
 Currently supported XDG_SESSION_TYPE values:
+
 - `wayland`: Uses the `xdg-desktop-portal` API for screen capture. Ensure that the appropriate backend (e.g., `xdg-desktop-portal-kde` for KDE or `xdg-desktop-portal-gnome` for GNOME) is installed and running. Compatibility may vary depending on the compositor (e.g., KWin for KDE, Mutter for GNOME).
 - `x11`: Relies on the `mss` library for screen capture. This works well with most X11-based environments but may encounter issues with minimal window managers or restricted X11 configurations.
 
 Other session types (e.g. `mir`, `tty`) are not supported yet, but contributions are welcome! For example, adding support for `mir` would require implementing a Mir-specific API, and `tty` would need a different approach entirely.
+
 ## 📄 License
 
 MIT License - see the [LICENSE](LICENSE) file for details.
@@ -148,6 +165,5 @@ MIT License - see the [LICENSE](LICENSE) file for details.
 ---
 
 **Region to Share** - Simplified screen region sharing for Linux 🐧
-````
 
 [![region-to-share](https://snapcraft.io/region-to-share/badge.svg)](https://snapcraft.io/region-to-share)

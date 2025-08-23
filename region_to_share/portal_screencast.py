@@ -7,14 +7,21 @@ gi.require_version("GstApp", "1.0")
 
 import dbus
 import dbus.mainloop.glib
-import os
 import time
-import threading
-from gi.repository import Gst, GLib, GstApp  # type:ignore
+from gi.repository import Gst  # type:ignore
 from PyQt5.QtGui import QImage, QPixmap
-from PyQt5.QtCore import QObject, pyqtSignal, QThread, QTimer
+from PyQt5.QtCore import QObject, pyqtSignal, QTimer, Qt
 from PyQt5.QtWidgets import QApplication
-import numpy as np
+from region_to_share.debug import debug_print
+
+# Import NO_CONV from frame_profiler for optimization
+try:
+    from .frame_profiler import NO_CONV
+except ImportError:
+    try:
+        NO_CONV = Qt.ImageConversionFlag.NoFormatConversion  # PyQt6
+    except AttributeError:
+        NO_CONV = Qt.NoFormatConversion  # PyQt5
 
 dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
 
@@ -57,7 +64,7 @@ class PortalScreenCast(QObject):
             )
             return True
         except Exception as e:
-            print(f"Error initializing D-Bus: {e}")
+            debug_print(f"Error initializing D-Bus: {e}")
             return False
 
     def _init_gst(self):
@@ -168,12 +175,14 @@ class PortalScreenCast(QObject):
             self._session_handle_received = None
 
             def on_session_response(response, results):
-                print(f"Session Response: response={response}, results={results}")
+                debug_print(f"Session Response: response={response}, results={results}")
                 if response == 0:
                     self._session_handle_received = results.get("session_handle")
-                    print(f"Session handle received: {self._session_handle_received}")
+                    debug_print(
+                        f"Session handle received: {self._session_handle_received}"
+                    )
                 else:
-                    print(f"Session error: {response}")
+                    debug_print(f"Session error: {response}")
                 self._session_response_received = True
 
             try:
@@ -184,12 +193,12 @@ class PortalScreenCast(QObject):
                     request_obj, "org.freedesktop.portal.Request"
                 )
                 request_iface.connect_to_signal("Response", on_session_response)
-                print(f"Signal connected on: {request_path}")
+                debug_print(f"Signal connected on: {request_path}")
             except Exception as e:
-                print(f"Unable to connect signal: {e}")
+                debug_print(f"Unable to connect signal: {e}")
 
             session_result = self.iface.CreateSession(session_options)
-            print(f"CreateSession result: {session_result}")
+            debug_print(f"CreateSession result: {session_result}")
 
             def check_session_response():
                 return (
@@ -225,7 +234,7 @@ class PortalScreenCast(QObject):
             self._select_response_received = False
 
             def on_select_response(response, results):
-                print(f"Select Response: response={response}, results={results}")
+                debug_print(f"Select Response: response={response}, results={results}")
                 self._select_response_received = True
 
             try:
@@ -237,12 +246,12 @@ class PortalScreenCast(QObject):
                 )
                 select_request_iface.connect_to_signal("Response", on_select_response)
             except Exception as e:
-                print(f"Unable to connect select signal: {e}")
+                debug_print(f"Unable to connect select signal: {e}")
 
             select_result = self.iface.SelectSources(
                 self.session_handle, select_options
             )
-            print(f"SelectSources result: {select_result}")
+            debug_print(f"SelectSources result: {select_result}")
 
             def check_select_response():
                 return True if self._select_response_received else None
@@ -253,11 +262,11 @@ class PortalScreenCast(QObject):
                 raise RuntimeError("Timeout waiting for source selection response")
 
             self._session_initialized = True
-            print("✅ Portal session initialized")
+            debug_print("✅ Portal session initialized")
             return True
 
         except Exception as e:
-            print(f"❌ Error initializing portal session: {e}")
+            debug_print(f"❌ Error initializing portal session: {e}")
             import traceback
 
             traceback.print_exc()
@@ -292,16 +301,16 @@ class PortalScreenCast(QObject):
             self._streams_received = None
 
             def on_start_response(response, results):
-                print(f"Start Response: response={response}, results={results}")
+                debug_print(f"Start Response: response={response}, results={results}")
                 if response == 0:
                     streams = results.get("streams", [])
                     self._streams_received = streams
-                    print(f"Streams received: {streams}")
+                    debug_print(f"Streams received: {streams}")
                     if streams:
                         self.node_id = int(streams[0][0])
-                        print(f"Node ID: {self.node_id}")
+                        debug_print(f"Node ID: {self.node_id}")
                 else:
-                    print(f"Start error: {response}")
+                    debug_print(f"Start error: {response}")
                 self._start_response_received = True
 
             try:
@@ -312,15 +321,15 @@ class PortalScreenCast(QObject):
                     start_request_obj, "org.freedesktop.portal.Request"
                 )
                 start_request_iface.connect_to_signal("Response", on_start_response)
-                print(f"Start signal connected on: {start_request_path}")
+                debug_print(f"Start signal connected on: {start_request_path}")
             except Exception as e:
-                print(f"Unable to connect start signal: {e}")
+                debug_print(f"Unable to connect start signal: {e}")
 
             parent_window = ""
             start_result = self.iface.Start(
                 self.session_handle, parent_window, start_options
             )
-            print(f"Start result: {start_result}")
+            debug_print(f"Start result: {start_result}")
 
             def check_start_response():
                 return True if self._start_response_received else None
@@ -334,7 +343,7 @@ class PortalScreenCast(QObject):
                 raise RuntimeError("No stream received after Start")
 
             self.pw_fd = self.iface.OpenPipeWireRemote(self.session_handle, {})
-            print(f"PipeWire FD: {self.pw_fd}")
+            debug_print(f"PipeWire FD: {self.pw_fd}")
 
             if not self.pw_fd:
                 raise RuntimeError("Unable to open PipeWire remote")
@@ -343,12 +352,12 @@ class PortalScreenCast(QObject):
             success = self._build_pipeline()
 
             if success:
-                print(f"✅ Portal capture started for region {x},{y} {w}x{h}")
+                debug_print(f"✅ Portal capture started for region {x},{y} {w}x{h}")
 
             return success
 
         except Exception as e:
-            print(f"❌ Error starting portal capture: {e}")
+            debug_print(f"❌ Error starting portal capture: {e}")
             import traceback
 
             traceback.print_exc()
@@ -374,10 +383,10 @@ class PortalScreenCast(QObject):
                 pipewiresrc fd={pw_fd_int} path={self.node_id} always-copy=true ! 
                 videoconvert ! 
                 video/x-raw,format=BGRx ! 
-                appsink name=sink emit-signals=true max-buffers=1 drop=true sync=false
+                appsink name=sink emit-signals=true max-buffers=2 drop=true sync=false
             """
 
-            print(f"GStreamer pipeline: {pipeline_str}")
+            debug_print(f"GStreamer pipeline: {pipeline_str}")
 
             self._pipeline = Gst.parse_launch(pipeline_str)
             if not self._pipeline:
@@ -389,7 +398,7 @@ class PortalScreenCast(QObject):
 
             ret = self._pipeline.set_state(Gst.State.PLAYING)
             if ret == Gst.StateChangeReturn.FAILURE:
-                print("❌ Unable to start GStreamer pipeline")
+                debug_print("❌ Unable to start GStreamer pipeline")
                 bus = self._pipeline.get_bus()
                 while True:
                     msg = bus.pop()
@@ -397,15 +406,15 @@ class PortalScreenCast(QObject):
                         break
                     if msg.type == Gst.MessageType.ERROR:
                         err, debug = msg.parse_error()
-                        print(f"GStreamer ERROR: {err}")
-                        print(f"GStreamer DEBUG: {debug}")
+                        debug_print(f"GStreamer ERROR: {err}")
+                        debug_print(f"GStreamer DEBUG: {debug}")
                 return False
 
-            print("✅ GStreamer pipeline started")
+            debug_print("✅ GStreamer pipeline started")
             return True
 
         except Exception as e:
-            print(f"❌ Error building pipeline: {e}")
+            debug_print(f"❌ Error building pipeline: {e}")
             return False
 
     def capture_frame(self) -> QPixmap:
@@ -457,19 +466,26 @@ class PortalScreenCast(QObject):
                 if w <= 0 or h <= 0:
                     raise RuntimeError("Invalid crop region for QPixmap")
 
+                # Version sécurisée : utiliser copy() mais optimiser la conversion QPixmap
                 cropped = full_image.copy(x, y, w, h)
-                return QPixmap.fromImage(cropped)
+
+                # Optimisation: utiliser fromImage avec NO_CONV (seulement ça)
+                return QPixmap.fromImage(cropped, NO_CONV)
 
             finally:
                 buf.unmap(mapinfo)
 
         except Exception as e:
-            print(f"❌ Error capturing frame: {e}")
+            debug_print(f"❌ Error capturing frame: {e}")
             raise
 
     def cleanup(self):
         """Clean up resources"""
         try:
+            # Clean up optimized pixmap
+            if hasattr(self, "_portal_pixmap"):
+                delattr(self, "_portal_pixmap")
+
             if self._pipeline:
                 self._pipeline.set_state(Gst.State.NULL)
                 self._pipeline = None
@@ -487,10 +503,10 @@ class PortalScreenCast(QObject):
                 self._loop = None
 
             self._session_initialized = False
-            print("🧹 Portal cleanup done")
+            debug_print("🧹 Portal cleanup done")
 
         except Exception as e:
-            print(f"Error cleaning up portal: {e}")
+            debug_print(f"Error cleaning up portal: {e}")
 
     def __del__(self):
         self.cleanup()
