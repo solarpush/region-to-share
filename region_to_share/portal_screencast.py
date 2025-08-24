@@ -68,10 +68,40 @@ class PortalScreenCast(QObject):
             return False
 
     def _init_gst(self):
-        """Initialise GStreamer"""
+        """Initialise GStreamer avec gestion d'erreur robuste"""
         if not self._gst_inited:
-            Gst.init(None)
-            self._gst_inited = True
+            try:
+                Gst.init(None)
+                self._gst_inited = True
+                debug_print("✅ GStreamer initialized successfully")
+
+                # Test de disponibilité PipeWire
+                self._test_pipewire_availability()
+
+            except Exception as e:
+                debug_print(f"❌ Failed to initialize GStreamer: {e}")
+                raise RuntimeError(f"GStreamer initialization failed: {e}")
+
+    def _test_pipewire_availability(self):
+        """Test si PipeWire est disponible et fonctionnel"""
+        try:
+            registry = Gst.Registry.get()
+            pipewiresrc_feature = registry.find_feature(
+                "pipewiresrc", Gst.ElementFactory
+            )
+            if not pipewiresrc_feature:
+                raise RuntimeError("PipeWire GStreamer plugin not found")
+
+            # Test de création d'un élément pipewiresrc
+            test_element = Gst.ElementFactory.make("pipewiresrc", "test")
+            if not test_element:
+                raise RuntimeError("Cannot create pipewiresrc element")
+
+            debug_print("✅ PipeWire GStreamer plugin available")
+
+        except Exception as e:
+            debug_print(f"❌ PipeWire test failed: {e}")
+            raise RuntimeError(f"PipeWire not available: {e}")
 
     def _start_glib_loop(self):
         """Démarre la boucle GLib (ne plus nécessaire avec l'approche Qt)"""
@@ -388,9 +418,21 @@ class PortalScreenCast(QObject):
 
             debug_print(f"GStreamer pipeline: {pipeline_str}")
 
-            self._pipeline = Gst.parse_launch(pipeline_str)
-            if not self._pipeline:
-                raise RuntimeError("Unable to create GStreamer pipeline")
+            # Vérification de la disponibilité du plugin pipewiresrc
+            registry = Gst.Registry.get()
+            pipewiresrc_feature = registry.find_feature(
+                "pipewiresrc", Gst.ElementFactory
+            )
+            if not pipewiresrc_feature:
+                raise RuntimeError("PipeWire GStreamer plugin not available")
+
+            try:
+                self._pipeline = Gst.parse_launch(pipeline_str)
+                if not self._pipeline:
+                    raise RuntimeError("Unable to create GStreamer pipeline")
+            except Exception as e:
+                debug_print(f"❌ Pipeline creation failed: {e}")
+                raise RuntimeError(f"GStreamer pipeline creation failed: {e}")
 
             self._appsink = self._pipeline.get_child_by_name("sink")
             if not self._appsink:

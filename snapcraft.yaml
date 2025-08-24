@@ -1,6 +1,6 @@
 name: region-to-share
 base: core22
-version: '1.0.6'
+version: '1.0.7'
 summary: Share selected screen regions - perfect for ultrawide screens
 description: |
   Region-to-Share allows you to select a specific area of your screen
@@ -53,6 +53,15 @@ apps:
       # Prefer Wayland, fall back to X11 if needed
       QT_QPA_PLATFORM: "wayland;xcb"
       QTWEBENGINE_DISABLE_SANDBOX: "1"
+      
+      # PipeWire configuration
+      PIPEWIRE_CONFIG_DIR: "$SNAP/usr/share/pipewire"
+      PIPEWIRE_MODULE_DIR: "$SNAP/usr/lib/$SNAPCRAFT_ARCH_TRIPLET/pipewire-0.3"
+      SPA_PLUGIN_DIR: "$SNAP/usr/lib/$SNAPCRAFT_ARCH_TRIPLET/spa-0.2"
+      
+      # GStreamer configuration  
+      GST_PLUGIN_PATH: "$SNAP/usr/lib/$SNAPCRAFT_ARCH_TRIPLET/gstreamer-1.0"
+      GST_PLUGIN_SYSTEM_PATH: "$SNAP/usr/lib/$SNAPCRAFT_ARCH_TRIPLET/gstreamer-1.0"
 
 parts:
   region-to-share:
@@ -91,6 +100,10 @@ parts:
 
       # PipeWire client (daemon provided by host)
       - libpipewire-0.3-0
+      - libspa-0.2-modules
+      
+      # PulseAudio libraries (needed by GStreamer)
+      - libpulse0
 
       # GStreamer (keep minimal; add good/bad/ugly only if required)
       - libgstreamer1.0-0
@@ -111,6 +124,9 @@ parts:
       # Essential GLib libraries (minimal set, correct package names)
       - libglib2.0-0
       - libgdk-pixbuf-2.0-0
+      
+      # PipeWire configuration files
+      - pipewire-media-session
       
       # Mesa/OpenGL libraries for graphics acceleration
       - libgl1-mesa-glx

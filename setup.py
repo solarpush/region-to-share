@@ -11,7 +11,7 @@ long_description = (here / "README.md").read_text(encoding="utf-8")
 
 setup(
     name="region-to-share",
-    version="1.0.6",
+    version="1.0.7",
     description="High-performance real-time screen region capture and sharing for GNOME Wayland with advanced performance monitoring",
     long_description=long_description,
     long_description_content_type="text/markdown",

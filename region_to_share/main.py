@@ -264,7 +264,7 @@ def main():
     parser.add_argument(
         "--version",
         action="version",
-        version="Region-to-Share 1.0.6 - High-performance screen region capture for GNOME Wayland",
+        version="Region-to-Share 1.0.7 - High-performance screen region capture for GNOME Wayland",
     )
 
     # Parse arguments (excluding Qt arguments)
