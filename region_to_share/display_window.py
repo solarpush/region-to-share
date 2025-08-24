@@ -26,9 +26,6 @@ from .config import config
 
 # Import debug function from main
 from region_to_share.debug import debug_print
-
-
-import subprocess
 from PyQt5.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -52,7 +49,9 @@ class DisplayWindow(QWidget):
 
     closed = pyqtSignal()
 
-    def __init__(self, x, y, width, height, capture_mode=None, frame_rate=30):
+    def __init__(
+        self, x, y, width, height, capture_mode=None, frame_rate=30, shared_portal=None
+    ):
         super().__init__()
         self.region_x = x
         self.region_y = y
@@ -62,6 +61,11 @@ class DisplayWindow(QWidget):
         self.capture_timer = QTimer()
         self.capture_mode = capture_mode
         self.frame_rate = frame_rate
+        self.shared_portal = shared_portal
+        if shared_portal:
+            debug_print(f"🔗 Portal partagé reçu (ID: {id(shared_portal)})")
+        else:
+            debug_print("⚠️ Aucun portal partagé fourni")
 
         # Calculate interval
         interval_ms = int(1000 / frame_rate)
@@ -85,7 +89,9 @@ class DisplayWindow(QWidget):
 
         self.session_type = os.environ.get("XDG_SESSION_TYPE", "").lower()
         # Create universal capture instance with forced mode if specified
-        self.capturer = create_capture(capture_mode=capture_mode)
+        self.capturer = create_capture(
+            capture_mode=capture_mode, shared_portal=self.shared_portal
+        )
 
         # Set window icon
         self.set_window_icon()
@@ -460,11 +466,24 @@ class DisplayWindow(QWidget):
 
     def send_to_background(self):
         """Send window to background instead of minimizing"""
-        # Lower the window (send to back)
-        self.lower()
-        # Also remove focus to make it less prominent
-        self.clearFocus()
-        debug_print("Window sent to background")
+        try:
+            if self.session_type == "wayland":
+                # Sous Wayland, utiliser showMinimized qui est mieux supporté
+                self.showMinimized()
+                debug_print("Window minimized (Wayland)")
+            else:
+                # Sous X11, utiliser lower() qui fonctionne bien
+                self.lower()
+                self.clearFocus()
+                debug_print("Window sent to background (X11)")
+        except Exception as e:
+            debug_print(f"Error sending window to background: {e}")
+            # Fallback: essayer showMinimized sur toutes les sessions
+            try:
+                self.showMinimized()
+                debug_print("Window minimized (fallback)")
+            except Exception as e2:
+                debug_print(f"Fallback failed: {e2}")
 
     def toggle_transparency(self):
         """Toggle window transparency to make it discreet"""

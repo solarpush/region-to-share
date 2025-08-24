@@ -39,6 +39,7 @@ class RegionToShareApp:
         self.capture_mode = capture_mode
         self.show_perf = show_perf
         self.frame_rate = frame_rate
+        self.shared_portal = None  # Stocker le portal partagé au niveau application
 
         # Configure profiling based on show_perf flag
         if show_perf:
@@ -96,6 +97,12 @@ class RegionToShareApp:
         if hasattr(self, "timer") and self.timer:
             self.timer.stop()
 
+        # Nettoyer le portal partagé
+        if hasattr(self, "shared_portal") and self.shared_portal:
+            debug_print(f"🧹 Nettoyage portal partagé (ID: {id(self.shared_portal)})")
+            self.shared_portal.cleanup()
+            self.shared_portal = None
+
         if self.display_window:
             self.display_window.close()
             self.display_window = None
@@ -124,7 +131,7 @@ class RegionToShareApp:
                 )
                 if width > 0 and height > 0:
                     debug_print("Auto using specific region (skipping selector)")
-                    self.on_selection_made(x, y, width, height, True)
+                    self.on_selection_made(x, y, width, height, True, None)
                     return
                 else:
                     debug_print(
@@ -137,7 +144,9 @@ class RegionToShareApp:
         self.screen_selector.selection_made.connect(self.on_selection_made)
         self.screen_selector.show()
 
-    def on_selection_made(self, x, y, width, height, reuse_last_region=False):
+    def on_selection_made(
+        self, x, y, width, height, reuse_last_region=False, shared_portal=None
+    ):
         """Callback called when a region is selected"""
         debug_print(f"Region selected: x={x}, y={y}, width={width}, height={height}")
         debug_print(f"Selection callback: reuse_last_region={reuse_last_region}")
@@ -154,6 +163,15 @@ class RegionToShareApp:
         debug_print(
             f"Creating display window with capture_mode={self.capture_mode}, frame_rate={self.frame_rate}"
         )
+
+        if shared_portal:
+            debug_print("✅ Réutilisation du portal partagé depuis le sélecteur")
+            # Stocker le portal partagé dans l'application pour maintenir la référence
+            self.shared_portal = shared_portal
+            debug_print(
+                f"🔗 Portal stocké dans l'application (ID: {id(shared_portal)})"
+            )
+
         self.display_window = DisplayWindow(
             x,
             y,
@@ -161,6 +179,7 @@ class RegionToShareApp:
             height,
             capture_mode=self.capture_mode,
             frame_rate=self.frame_rate,
+            shared_portal=shared_portal,  # Passer le portal partagé
         )
         self.display_window.closed.connect(self.cleanup)
         self.display_window.show()
@@ -211,7 +230,12 @@ def main():
         "--capture-mode",
         choices=["auto", "portal-screencast", "mss"],
         default="auto",
-        help="Force a specific capture method (default: auto-detect)",
+        help="Force a specific capture method. Options: "
+        "'auto' (default, auto-detect best method), "
+        "'portal-screencast' (Wayland portal via PipeWire), "
+        "'mss' (X11 direct capture, or XWayland under Wayland). "
+        "Under Wayland: 'portal-screencast' is preferred but 'mss' can work via XWayland. "
+        "Under X11: 'mss' is preferred for performance.",
     )
 
     parser.add_argument("--debug", action="store_true", help="Enable debug output")
@@ -264,7 +288,7 @@ def main():
     parser.add_argument(
         "--version",
         action="version",
-        version="Region-to-Share 1.0.7 - High-performance screen region capture for GNOME Wayland",
+        version="Region-to-Share 1.0.8 - High-performance screen region capture for GNOME Wayland",
     )
 
     # Parse arguments (excluding Qt arguments)

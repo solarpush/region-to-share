@@ -24,6 +24,7 @@ class Config:
             "remember_last_region": False,
             "auto_use_specific_region": False,
             "last_region": {"x": 0, "y": 0, "width": 800, "height": 600},
+            "global_shortcut": "",
         }
         self.settings = self.load_settings()
 

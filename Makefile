@@ -2,7 +2,7 @@
 
 # Variables
 SNAP_NAME = region-to-share
-VERSION = 1.0.7
+VERSION = 1.0.8
 SNAP_FILE = $(SNAP_NAME)_$(VERSION)_amd64.snap
 
 help:
@@ -23,7 +23,7 @@ clean:
 
 build:
 	@echo "Building snap package..."
-	snapcraft --use-lxd
+	snapcraft pack --use-lxd
 
 upload:
 	@echo "Uploading $(SNAP_FILE) to Snap Store..."

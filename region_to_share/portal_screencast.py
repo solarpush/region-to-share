@@ -524,6 +524,7 @@ class PortalScreenCast(QObject):
     def cleanup(self):
         """Clean up resources"""
         try:
+            debug_print(f"🧹 Portal cleanup called (ID: {id(self)})")
             # Clean up optimized pixmap
             if hasattr(self, "_portal_pixmap"):
                 delattr(self, "_portal_pixmap")
@@ -549,6 +550,11 @@ class PortalScreenCast(QObject):
 
         except Exception as e:
             debug_print(f"Error cleaning up portal: {e}")
+
+    def set_crop_region(self, x, y, w, h):
+        """Change the crop region without restarting the portal session"""
+        self._region = (x, y, w, h)
+        debug_print(f"🔄 Portal crop region changed to {x},{y} {w}x{h}")
 
     def __del__(self):
         self.cleanup()

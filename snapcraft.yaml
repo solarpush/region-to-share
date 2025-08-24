@@ -1,6 +1,6 @@
 name: region-to-share
 base: core22
-version: '1.0.7'
+version: '1.0.8'
 summary: Share selected screen regions - perfect for ultrawide screens
 description: |
   Region-to-Share allows you to select a specific area of your screen
@@ -49,6 +49,7 @@ apps:
       - network
       - unity7                 # for X11 desktop integration
       - gsettings              # for accessing desktop settings
+      - process-control        # for killall commands (restart settings daemon)
     environment:
       # Prefer Wayland, fall back to X11 if needed
       QT_QPA_PLATFORM: "wayland;xcb"

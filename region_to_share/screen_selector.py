@@ -23,8 +23,8 @@ class ScreenSelector(QWidget):
     """Screen region selection widget"""
 
     selection_made = pyqtSignal(
-        int, int, int, int, bool
-    )  # x, y, width, height, reuse_last_region
+        int, int, int, int, bool, object
+    )  # x, y, width, height, reuse_last_region, shared_portal
 
     def __init__(self):
         super().__init__()
@@ -37,6 +37,7 @@ class ScreenSelector(QWidget):
         self.rubber_band = None
         self.screenshot = None
         self.last_region_overlay = None
+        self._shared_portal = None  # Pour partager la session portal
         self.setup_ui()
         self.take_screenshot()
         self.show_last_region_if_enabled()
@@ -103,15 +104,31 @@ class ScreenSelector(QWidget):
         debug_print("⚠️  Could not find application icon for selector")
 
     def take_screenshot(self):
-        """Takes a screenshot of all monitors - X11 compatible"""
+        """Takes a screenshot of all monitors - Compatible X11 and Wayland"""
         try:
-            # Method 1: Try Qt method (works on X11, limited on Wayland)
-            if self._try_qt_screenshot():
-                return
+            session_type = os.environ.get("XDG_SESSION_TYPE", "").lower()
 
-            # Method 2: Try MSS (usually works on X11)
-            if self._try_mss_screenshot():
+            if session_type == "wayland":
+                # Sous Wayland, essayer le portal en premier
+                debug_print("🔄 Wayland détecté, tentative portal ScreenCast")
+
+                # Method 1: Try portal screenshot (full screen)
+                if self._try_portal_screenshot():
+                    return
+
+                # Method 2: Skip screenshot under Wayland (fallback avec grille)
+                debug_print("⚠️  Capture d'écran non disponible sous Wayland")
+                self._fallback_no_screenshot()
                 return
+            else:
+                # Sur X11, utiliser l'ordre normal
+                # Method 1: Try Qt method (works well on X11)
+                if self._try_qt_screenshot():
+                    return
+
+                # Method 2: Try MSS (usually works on X11)
+                if self._try_mss_screenshot():
+                    return
 
             # Fallback: no screenshot
             self._fallback_no_screenshot()
@@ -164,20 +181,113 @@ class ScreenSelector(QWidget):
             debug_print(f"Qt screenshot failed: {e}")
             return False
 
+    def _try_portal_screenshot(self):
+        """Try portal ScreenCast for full screen capture under Wayland"""
+        try:
+            from .portal_screencast import PortalScreenCast
+
+            debug_print("🔄 Tentative capture portal ScreenCast")
+
+            # Créer une instance portal
+            portal = PortalScreenCast()
+
+            # Initialiser la session
+            if not portal.initialize_session():
+                debug_print("❌ Échec initialisation session portal")
+                return False
+
+            # Pour une capture plein écran, on utilise les dimensions de l'écran
+            screen_geometry = QApplication.desktop().screenGeometry()
+            screen_width = screen_geometry.width()
+            screen_height = screen_geometry.height()
+
+            debug_print(f"Dimensions écran: {screen_width}x{screen_height}")
+
+            # Démarrer la capture de tout l'écran (x=0, y=0)
+            if not portal.start_area_capture(0, 0, screen_width, screen_height):
+                debug_print("❌ Échec démarrage capture portal")
+                portal.cleanup()
+                return False
+
+            # Capturer quelques frames pour stabiliser
+            for i in range(3):
+                try:
+                    pixmap = portal.capture_frame()
+                    if pixmap and not pixmap.isNull():
+                        self.screenshot = pixmap
+                        debug_print(
+                            f"✅ Portal screenshot réussi! Taille: {pixmap.width()}x{pixmap.height()}"
+                        )
+                        # IMPORTANT: Garder la session portal ouverte pour réutilisation
+                        # Stocker l'instance portal pour la réutiliser dans la fenêtre d'affichage
+                        self._shared_portal = portal
+                        debug_print(f"🔗 Portal partagé stocké (ID: {id(portal)})")
+                        return True
+                except Exception as e:
+                    debug_print(f"Tentative capture {i+1}/3 échouée: {e}")
+
+                # Petite pause entre les tentatives
+                import time
+
+                time.sleep(0.1)
+
+            debug_print("❌ Toutes les tentatives de capture portal ont échoué")
+            portal.cleanup()
+            return False
+
+        except ImportError:
+            debug_print("❌ Module portal_screencast non disponible")
+            return False
+        except Exception as e:
+            debug_print(f"❌ Erreur portal screenshot: {e}")
+            return False
+
     def _fallback_no_screenshot(self):
         """Fallback: create a semi-transparent overlay without screenshot"""
-        debug_print("⚠️  Screenshot not available, using transparent overlay")
-        # Create a small transparent pixmap
-        screen_geometry = QApplication.desktop().screenGeometry()
-        self.screenshot = QPixmap(screen_geometry.size())
-        self.screenshot.fill(QColor(20, 20, 20, 50))  # Dark semi-transparent
+        session_type = os.environ.get("XDG_SESSION_TYPE", "").lower()
 
-        # Update instructions
-        self.instruction_label.setText(
-            "Screenshot not available on this system\n"
-            "Click and drag to select a screen region\n"
-            "Press Esc to cancel"
-        )
+        if session_type == "wayland":
+            debug_print("⚠️  Screenshot not available under Wayland, using grid overlay")
+
+            # Créer un overlay avec grille pour aider à la sélection
+            screen_geometry = QApplication.desktop().screenGeometry()
+            self.screenshot = QPixmap(screen_geometry.size())
+            self.screenshot.fill(QColor(30, 30, 30, 120))  # Fond semi-transparent
+
+            # Dessiner une grille pour aider à la sélection
+            painter = QPainter(self.screenshot)
+            painter.setPen(QColor(100, 100, 100, 150))
+
+            # Grille tous les 100 pixels
+            width = screen_geometry.width()
+            height = screen_geometry.height()
+
+            for x in range(0, width, 100):
+                painter.drawLine(x, 0, x, height)
+            for y in range(0, height, 100):
+                painter.drawLine(0, y, width, y)
+
+            painter.end()
+
+            # Instructions spécifiques Wayland
+            self.instruction_label.setText(
+                "Background screenshot not available under Wayland\n"
+                "Use the grid to help select your screen region\n"
+                "Click and drag to select • Press Esc to cancel"
+            )
+        else:
+            debug_print("⚠️  Screenshot not available, using transparent overlay")
+            # Create a dark semi-transparent overlay
+            screen_geometry = QApplication.desktop().screenGeometry()
+            self.screenshot = QPixmap(screen_geometry.size())
+            self.screenshot.fill(QColor(20, 20, 20, 50))  # Dark semi-transparent
+
+            # Update instructions
+            self.instruction_label.setText(
+                "Screenshot not available on this system\n"
+                "Click and drag to select a screen region\n"
+                "Press Esc to cancel"
+            )
 
     def paintEvent(self, event):
         """Draws the screenshot as background"""
@@ -233,6 +343,7 @@ class ScreenSelector(QWidget):
                     selection_rect.width(),
                     selection_rect.height(),
                     False,  # reuse_last_region = False for new selections
+                    self._shared_portal,  # Passer le portal partagé s'il existe
                 )
 
             self.rubber_band.hide()
@@ -292,8 +403,25 @@ class ScreenSelector(QWidget):
                     if width > 0 and height > 0:
                         debug_print("🔄 Reusing last selected region")
                         self.selection_made.emit(
-                            x, y, width, height, True
-                        )  # reuse_last_region = True
+                            x, y, width, height, True, self._shared_portal
+                        )  # reuse_last_region = True, passer le portal partagé
                         self.close()
                         return
         super().keyPressEvent(event)
+
+    def closeEvent(self, event):
+        """Handle window close event - avoid cleaning shared portal"""
+        try:
+            # Ne pas nettoyer le portal s'il est partagé
+            if hasattr(self, "_shared_portal") and self._shared_portal:
+                debug_print(
+                    f"🔒 Portal partagé préservé (ID: {id(self._shared_portal)})"
+                )
+                # Marquer le portal comme détaché pour éviter le nettoyage automatique
+                self._shared_portal = None
+
+        except Exception as e:
+            debug_print(f"Erreur lors de la fermeture du sélecteur: {e}")
+
+        event.accept()
+        super().closeEvent(event)

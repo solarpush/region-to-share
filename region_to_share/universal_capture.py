@@ -43,15 +43,20 @@ except ImportError:
 class UniversalCapture:
     """Universal screen capture that works on both X11 and Wayland"""
 
-    def __init__(self, capture_mode=None):
+    def __init__(self, capture_mode=None, shared_portal=None):
         """
         Initialize UniversalCapture
 
         Args:
             capture_mode (str, optional): Force a specific capture method.
                 Options: 'portal-screencast', 'mss', 'auto'
+            shared_portal (object, optional): Existing portal instance to reuse
         """
         self.forced_mode = capture_mode
+        self.shared_portal = shared_portal
+        self._using_shared_portal = (
+            shared_portal is not None
+        )  # Flag pour traquer le portal partagé
         if capture_mode and capture_mode != "auto":
             self.capture_method = capture_mode
             debug_print(f"🔧 Forcing capture method: {self.capture_method}")
@@ -60,7 +65,7 @@ class UniversalCapture:
             debug_print(f"🎯 Using capture method: {self.capture_method}")
 
         self._temp_files = []
-        self._portal_screencast = None
+        self._portal_screencast = shared_portal  # Use shared portal if provided
         self._draw_cursor = (
             self.capture_method != "portal-screencast"
         )  # Portal doesn't support cursor drawing
@@ -135,10 +140,15 @@ class UniversalCapture:
         if session_type == "wayland":
             # En snap strict -> portail obligatoire
             if in_snap:
-                return "portal-screencast"
+                if HAS_PORTAL:
+                    return "portal-screencast"
+                else:
+                    debug_print("❌ Snap + Wayland nécessite le portail ScreenCast")
+                    return "none"
 
-            # Hors snap : portail préférable
+            # Hors snap : essayer portail, sinon fallback MSS avec XWayland
             if HAS_PORTAL:
+                debug_print("🔄 Wayland détecté, utilisation du portail ScreenCast")
                 return "portal-screencast"
             else:
                 debug_print(
@@ -149,8 +159,11 @@ class UniversalCapture:
             # Sur X11, préfère MSS pour les performances
             if HAS_MSS and self._test_mss():
                 return "mss"
+            elif HAS_PORTAL:
+                debug_print("🔄 MSS indisponible, fallback portail")
+                return "portal-screencast"
             else:
-                debug_print("❌ X11 détecté mais MSS ne fonctionne pas")
+                debug_print("❌ X11 détecté mais aucune méthode disponible")
                 return "none"
 
     def _test_mss(self) -> bool:
@@ -222,14 +235,22 @@ class UniversalCapture:
             else:
                 # Vérifier si la région a changé
                 if self._portal_screencast._region != (x, y, width, height):
-                    self._portal_screencast.cleanup()
-                    if not self._portal_screencast.start_area_capture(
-                        x, y, width, height
-                    ):
+                    if self._using_shared_portal:
+                        # Pour un portal partagé, juste changer la région de crop
                         debug_print(
-                            "❌ Échec redémarrage capture portail pour nouvelle région"
+                            f"🔄 Portal partagé - changement région crop vers {x},{y} {width}x{height}"
                         )
-                        return None
+                        self._portal_screencast.set_crop_region(x, y, width, height)
+                    else:
+                        # Portal normal - on peut le nettoyer et redémarrer
+                        self._portal_screencast.cleanup()
+                        if not self._portal_screencast.start_area_capture(
+                            x, y, width, height
+                        ):
+                            debug_print(
+                                "❌ Échec redémarrage capture portail pour nouvelle région"
+                            )
+                            return None
 
             t1 = now()
             pixmap = self._portal_screencast.capture_frame()
@@ -313,9 +334,18 @@ class UniversalCapture:
                 pass
             delattr(self, "_sct")
 
-        # Clean up Portal ScreenCast if active
-        if self._portal_screencast:
+        # Clean up Portal ScreenCast if active (but only if it's not shared)
+        if self._portal_screencast and not self._using_shared_portal:
+            debug_print(
+                f"🧹 Nettoyage portal UniversalCapture (ID: {id(self._portal_screencast)})"
+            )
             self._portal_screencast.cleanup()
+            self._portal_screencast = None
+        elif self._using_shared_portal:
+            debug_print(
+                f"🔒 Portal partagé préservé dans UniversalCapture (ID: {id(self._portal_screencast)})"
+            )
+            # Ne pas nettoyer le portal partagé, juste détacher la référence
             self._portal_screencast = None
 
         # Clean up temp files
@@ -333,11 +363,12 @@ class UniversalCapture:
 
 
 # Convenience function
-def create_capture(capture_mode=None):
+def create_capture(capture_mode=None, shared_portal=None):
     """Create a new capture instance
 
     Args:
         capture_mode (str, optional): Force a specific capture method.
             Options: 'portal-screencast', 'mss', 'auto'
+        shared_portal (object, optional): Existing portal instance to reuse
     """
-    return UniversalCapture(capture_mode=capture_mode)
+    return UniversalCapture(capture_mode=capture_mode, shared_portal=shared_portal)
