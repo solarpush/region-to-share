@@ -28,6 +28,8 @@ A simple and efficient Linux application for sharing specific areas of your scre
 - Python 3.8+
 - PyQt5 (installed automatically)
 
+For detailed linux package dependencies, check [SYSTEM_DEPENDENCIES.md](SYSTEM_DEPENDENCIES.md).
+
 ## Usage
 
 ```bash
@@ -82,21 +84,42 @@ sudo snap install region-to-share
 git clone https://github.com/solarpush/region-to-share.git
 cd region-to-share
 
-# Setup virtual environment
-./run_venv.sh
+# Ensure that all system wide dependencies (see SYSTEM_DEPENDENCIES.md) 
+# are installed
+
+# Setup virtual environment and install dependencies
+python3 -m venv venv_region
+source venv_region/bin/activate
+pip install -r requirements.txt
+
+# run the application (see Usage section for details)
+./run_venv.sh --help
 ```
 
 ## 🎯 Usage
 
 ### Launch
 
+Start the application by running one of the following commands, depending on your installation method:
+
 ```bash
+# for global installations, e.g. snap
+region-to-share
+```
+
+```bash
+# for source installation without venv (system wide python)
 ./run.sh
+```
+
+```bash
+# for source installation with venv
+./run_venv.sh
 ```
 
 ### Simple steps
 
-1. **Launch the application**: `./run.sh`
+1. **Launch the application**
 2. **Select a region**: Click and drag on your screen
 3. **Display window**: A window opens with your region in real-time
 4. **Share in video conference**:
