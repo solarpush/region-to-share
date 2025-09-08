@@ -7,10 +7,10 @@ You can run directly a debug script from :
 
 ```bash
 # wget
-bash <(wget -qO- https://github.com/solarpush/region-to-share/debug-script.sh)
+bash <(wget -qO- https://github.com/solarpush/region-to-share/blob/main/debug-script.sh)
 #or
 #curl
-bash <(curl -s  https://github.com/solarpush/region-to-share/debug-script.sh)
+bash <(curl -s  https://github.com/solarpush/region-to-share/blob/main/debug-script.sh)
 
 ```
 
