@@ -10,7 +10,12 @@ Run the following commands and paste the output:
 
 ```bash
 cat /etc/os-release
+<<<<<<< Updated upstream
 uname -a
+=======
+uname -a | sed 's/'"$(hostname)"'/HOSTNAME/g'
+lsb_release -a 2>/dev/null || true
+>>>>>>> Stashed changes
 ```
 
 ### 2. Display environment
