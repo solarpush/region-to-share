@@ -3,7 +3,7 @@
 
 echo "### 1. System details"
 cat /etc/os-release
-uname -a
+uname -a | sed 's/'"$(hostname)"'/HOSTNAME/g'
 lsb_release -a 2>/dev/null || true
 
 echo

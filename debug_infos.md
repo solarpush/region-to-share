@@ -20,7 +20,7 @@ bash <(curl -s  https://raw.githubusercontent.com/solarpush/region-to-share/main
 
 ```bash
 cat /etc/os-release
-uname -a
+uname -a | sed 's/'"$(hostname)"'/HOSTNAME/g'
 lsb_release -a 2>/dev/null || true
 ```
 
