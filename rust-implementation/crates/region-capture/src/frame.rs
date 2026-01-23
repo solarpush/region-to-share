@@ -115,6 +115,14 @@ impl FrameData {
         }
     }
 
+    /// Get a clone of the Arc buffer (zero-copy, just increment refcount).
+    pub fn as_arc_buffer(&self) -> Option<Arc<Vec<u8>>> {
+        match self {
+            Self::Buffer(buf) => Some(Arc::clone(buf)),
+            _ => None,
+        }
+    }
+
     /// Check if this is a zero-copy frame (DMA-BUF or shared memory).
     pub fn is_zero_copy(&self) -> bool {
         #[cfg(unix)]

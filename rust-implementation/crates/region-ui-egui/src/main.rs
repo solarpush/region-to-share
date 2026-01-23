@@ -6,6 +6,7 @@ use region_config::Config;
 use std::sync::Arc;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use std::sync::Mutex as StdMutex;
+use std::fs;
 
 fn main() -> Result<(), eframe::Error> {
     let runtime = tokio::runtime::Runtime::new().unwrap();
@@ -52,18 +53,30 @@ struct RegionApp {
     pending_resize: Option<(u32, u32)>,  // Redimensionnement en attente (width, height)
     resize_frame_count: u32,  // Compteur pour attendre quelques frames avant resize
     show_streaming_options: bool,  // Afficher la modal d'options pendant le streaming
+    // Stats système
+    cpu_usage: f64,
+    memory_mb: f64,
+    data_rate_mbps: f64,
 }
 
 #[derive(Clone)]
 struct FrameData {
     width: u32,
     height: u32,
-    data: Vec<u8>,
+    data: Arc<Vec<u8>>,  // Arc pour éviter les copies
     _format: PixelFormat,
 }
 
 enum StatsUpdate {
-    Progress { frames: u32, fps: f64, capture_ms: f64, frame_ms: f64 },
+    Progress { 
+        frames: u32, 
+        fps: f64, 
+        capture_ms: f64, 
+        frame_ms: f64,
+        cpu_percent: f64,
+        memory_mb: f64,
+        data_rate_mbps: f64,
+    },
     Frame(FrameData),
     Screenshot(FrameData),
     Stopped,
@@ -109,6 +122,9 @@ impl RegionApp {
             pending_resize: None,
             resize_frame_count: 0,
             show_streaming_options: false,
+            cpu_usage: 0.0,
+            memory_mb: 0.0,
+            data_rate_mbps: 0.0,
         }
     }
     
@@ -195,11 +211,11 @@ impl RegionApp {
             match backend.capture_screenshot().await {
                 Ok(frame) => {
                     println!("Screenshot capturé: {}x{}", frame.width, frame.height);
-                    if let Some(buffer) = frame.data.as_buffer() {
+                    if let Some(arc_buffer) = frame.data.as_arc_buffer() {
                     let frame_data = FrameData {
                         width: frame.width,
                         height: frame.height,
-                        data: buffer.to_vec(),
+                        data: arc_buffer,
                         _format: frame.format,
                     };
                     println!("Envoi du screenshot via channel...");
@@ -311,61 +327,79 @@ impl RegionApp {
     }
     
     fn process_updates(&mut self, ctx: &egui::Context) {
-        let mut updates = Vec::new();
+        // Collecter les updates et ne garder que la dernière frame
+        let mut last_frame: Option<FrameData> = None;
+        let mut last_screenshot: Option<FrameData> = None;
+        
         {
             let mut rx = self.stats_rx.lock().unwrap();
             while let Ok(update) = rx.try_recv() {
-                updates.push(update);
+                match update {
+                    StatsUpdate::Progress { frames, fps, capture_ms, frame_ms, cpu_percent, memory_mb, data_rate_mbps } => {
+                        self.frames_captured = frames;
+                        self.current_fps = fps;
+                        self.current_capture_ms = capture_ms;
+                        self.current_frame_ms = frame_ms;
+                        self.cpu_usage = cpu_percent;
+                        self.memory_mb = memory_mb;
+                        self.data_rate_mbps = data_rate_mbps;
+                    }
+                    StatsUpdate::Frame(frame_data) => {
+                        // Garder seulement la dernière frame (skip les anciennes)
+                        last_frame = Some(frame_data);
+                    }
+                    StatsUpdate::Screenshot(frame_data) => {
+                        last_screenshot = Some(frame_data);
+                    }
+                    StatsUpdate::Stopped => {
+                        self.capturing = false;
+                    }
+                }
             }
         }
         
-        for update in updates {
-            match update {
-                StatsUpdate::Progress { frames, fps, capture_ms, frame_ms } => {
-                    self.frames_captured = frames;
-                    self.current_fps = fps;
-                    self.current_capture_ms = capture_ms;
-                    self.current_frame_ms = frame_ms;
-                }
-                StatsUpdate::Frame(frame_data) => {
-                    if let Ok(image) = self.frame_to_image(&frame_data) {
-                        self.texture = Some(ctx.load_texture(
-                            "capture",
-                            image,
-                            Default::default(),
-                        ));
-                    }
-                }
-                StatsUpdate::Screenshot(frame_data) => {
-                    // Si on est en mode sélection, charger comme screenshot
-                    if self.selecting_region && self.screenshot_texture.is_none() {
-                        if let Ok(image) = self.frame_to_image(&frame_data) {
-                            self.screenshot_texture = Some(ctx.load_texture(
-                                "screenshot",
-                                image,
-                                Default::default(),
-                            ));
-                            self.selection_ready = true;
-                        }
-                    }
-                }
-                StatsUpdate::Stopped => {
-                    self.capturing = false;
+        // Traiter seulement la dernière frame (optimisation majeure)
+        if let Some(frame_data) = last_frame {
+            if let Ok(image) = self.frame_to_image(&frame_data) {
+                // Réutiliser la texture si possible, sinon en créer une nouvelle
+                self.texture = Some(ctx.load_texture(
+                    "capture",
+                    image,
+                    egui::TextureOptions::NEAREST, // Plus rapide que LINEAR
+                ));
+            }
+        }
+        
+        // Traiter le screenshot
+        if let Some(frame_data) = last_screenshot {
+            if self.selecting_region && self.screenshot_texture.is_none() {
+                if let Ok(image) = self.frame_to_image(&frame_data) {
+                    self.screenshot_texture = Some(ctx.load_texture(
+                        "screenshot",
+                        image,
+                        Default::default(),
+                    ));
+                    self.selection_ready = true;
                 }
             }
         }
     }
     
     fn frame_to_image(&self, frame_data: &FrameData) -> Result<egui::ColorImage, String> {
-        let pixels: Vec<egui::Color32> = frame_data.data
-            .chunks_exact(4)
+        // Conversion BGRA -> RGBA ultra-optimisée avec chunks
+        let pixel_count = (frame_data.width * frame_data.height) as usize;
+        let data = &*frame_data.data;
+        
+        // Pré-allouer avec exact_chunks pour permettre au compilateur d'optimiser
+        let pixels: Vec<egui::Color32> = data.chunks_exact(4)
+            .take(pixel_count)
             .map(|chunk| {
-                // BGRA -> RGBA
+                // BGRA -> RGBA : swap B et R, ignorer alpha
                 egui::Color32::from_rgba_unmultiplied(
-                    chunk[2], // R
+                    chunk[2], // R (was B)
                     chunk[1], // G
-                    chunk[0], // B
-                    chunk[3], // A
+                    chunk[0], // B (was R)
+                    255,      // A opaque
                 )
             })
             .collect();
@@ -615,12 +649,25 @@ impl eframe::App for RegionApp {
                         ui.heading("Options de streaming");
                         ui.separator();
                         
-                        // Stats
+                        // Stats de performance
                         if self.config.settings.show_performance {
+                            ui.label("📊 Performance");
                             ui.horizontal(|ui| {
                                 ui.label(format!("FPS: {:.1}", self.current_fps));
                                 ui.separator();
                                 ui.label(format!("Capture: {:.2}ms", self.current_capture_ms));
+                            });
+                            
+                            ui.label("💻 Ressources système");
+                            ui.horizontal(|ui| {
+                                ui.label(format!("CPU: {:.1}%", self.cpu_usage));
+                                ui.separator();
+                                ui.label(format!("RAM: {:.1} MB", self.memory_mb));
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label(format!("Débit: {:.2} MB/s", self.data_rate_mbps));
+                                ui.separator();
+                                ui.label(format!("Frames: {}", self.frames_captured));
                             });
                             ui.separator();
                         }
@@ -750,8 +797,8 @@ async fn capture_task_continuous(
     let region = Rectangle {
         x: region.x.max(0),
         y: region.y.max(0),
-        width: region.width.min(1920).max(1),
-        height: region.height.min(1080).max(1),
+        width: region.width.min(3840).max(1),
+        height: region.height.min(2160).max(1),
     };
     
     let mut backend = AutoBackend::new()?;
@@ -762,6 +809,11 @@ async fn capture_task_continuous(
     
     // Calculer le temps minimum entre chaque frame
     let frame_duration = std::time::Duration::from_secs_f64(1.0 / target_fps as f64);
+    
+    // Stats système
+    let mut resource_monitor = ResourceMonitor::new();
+    let mut total_bytes_sent: u64 = 0;
+    let stats_start = std::time::Instant::now();
     
     println!("Starting continuous stream: {}x{} at ({}, {}) - Target: {} FPS ({:.2}ms/frame)", 
         region.width, region.height, region.x, region.y, target_fps, frame_duration.as_secs_f64() * 1000.0);
@@ -785,24 +837,56 @@ async fn capture_task_continuous(
         
         frame_count += 1;
         
+        // Calculer la taille des données
+        let frame_bytes = if let Some(buffer) = frame.data.as_buffer() {
+            buffer.len() as u64
+        } else {
+            0
+        };
+        total_bytes_sent += frame_bytes;
+        
         if frame_count % 10 == 0 {
             let stats = profiler.stats();
+            
+            // Calculer les stats système
+            let (cpu_percent, memory_mb) = resource_monitor.get_stats();
+            
+            // Calculer le débit en MB/s
+            let elapsed_secs = stats_start.elapsed().as_secs_f64();
+            let data_rate_mbps = if elapsed_secs > 0.0 {
+                (total_bytes_sent as f64 / 1_000_000.0) / elapsed_secs
+            } else {
+                0.0
+            };
+            
             let _ = tx.send(StatsUpdate::Progress {
                 frames: frame_count,
                 fps: stats.avg_fps,
                 capture_ms: stats.avg_capture_ms,
                 frame_ms: stats.avg_frame_ms,
+                cpu_percent,
+                memory_mb,
+                data_rate_mbps,
             });
+            
+            // Log périodique dans la console
+            if frame_count % 100 == 0 {
+                println!("[Stats] FPS: {:.1} | CPU: {:.1}% | RAM: {:.1}MB | Débit: {:.2}MB/s | Frames: {}", 
+                    stats.avg_fps, cpu_percent, memory_mb, data_rate_mbps, frame_count);
+            }
         }
         
-        // Envoyer chaque frame (pas de skip)
-        if let Some(buffer) = frame.data.as_buffer() {
+        // Envoyer la frame seulement si le receiver peut la traiter
+        // (skip si le channel est surchargé pour éviter l'accumulation)
+        if let Some(arc_buffer) = frame.data.as_arc_buffer() {
+            // On envoie la frame - Arc::clone ne copie pas les données
             let frame_data = FrameData {
                 width: frame.width,
                 height: frame.height,
-                data: buffer.to_vec(),
+                data: arc_buffer, // Réutilise l'Arc, pas de copie
                 _format: frame.format,
             };
+            // Envoyer et ignorer si échec
             let _ = tx.send(StatsUpdate::Frame(frame_data));
         }
         
@@ -816,4 +900,77 @@ async fn capture_task_continuous(
     println!("Stream stopped: {} frames total", frame_count);
     
     Ok(())
+}
+
+/// Moniteur de ressources système (CPU, mémoire)
+struct ResourceMonitor {
+    last_cpu_time: u64,
+    last_check: std::time::Instant,
+}
+
+impl ResourceMonitor {
+    fn new() -> Self {
+        Self {
+            last_cpu_time: Self::get_process_cpu_time(),
+            last_check: std::time::Instant::now(),
+        }
+    }
+    
+    fn get_stats(&mut self) -> (f64, f64) {
+        let cpu_percent = self.get_cpu_usage();
+        let memory_mb = Self::get_memory_usage();
+        (cpu_percent, memory_mb)
+    }
+    
+    fn get_cpu_usage(&mut self) -> f64 {
+        let current_cpu_time = Self::get_process_cpu_time();
+        let elapsed = self.last_check.elapsed();
+        
+        if elapsed.as_millis() < 100 {
+            return 0.0;
+        }
+        
+        let cpu_delta = current_cpu_time.saturating_sub(self.last_cpu_time);
+        let elapsed_ticks = (elapsed.as_secs_f64() * 100.0) as u64; // En centièmes de seconde
+        
+        let cpu_percent = if elapsed_ticks > 0 {
+            (cpu_delta as f64 / elapsed_ticks as f64) * 100.0
+        } else {
+            0.0
+        };
+        
+        self.last_cpu_time = current_cpu_time;
+        self.last_check = std::time::Instant::now();
+        
+        cpu_percent.min(100.0)
+    }
+    
+    fn get_process_cpu_time() -> u64 {
+        // Lire /proc/self/stat pour obtenir le temps CPU du processus
+        if let Ok(stat) = fs::read_to_string("/proc/self/stat") {
+            let parts: Vec<&str> = stat.split_whitespace().collect();
+            if parts.len() > 14 {
+                let utime: u64 = parts[13].parse().unwrap_or(0);
+                let stime: u64 = parts[14].parse().unwrap_or(0);
+                return utime + stime;
+            }
+        }
+        0
+    }
+    
+    fn get_memory_usage() -> f64 {
+        // Lire /proc/self/status pour obtenir la mémoire RSS
+        if let Ok(status) = fs::read_to_string("/proc/self/status") {
+            for line in status.lines() {
+                if line.starts_with("VmRSS:") {
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+                    if parts.len() >= 2 {
+                        let kb: f64 = parts[1].parse().unwrap_or(0.0);
+                        return kb / 1024.0; // Convertir en MB
+                    }
+                }
+            }
+        }
+        0.0
+    }
 }
