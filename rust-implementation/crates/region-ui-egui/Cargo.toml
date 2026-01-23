@@ -7,7 +7,9 @@ edition = "2021"
 region-core = { path = "../region-core" }
 region-capture = { path = "../region-capture", features = ["x11"] }
 region-config = { path = "../region-config" }
+region-portal = { path = "../region-portal" }
 eframe = "0.30"
 egui = "0.30"
 tokio = { version = "1.49", features = ["full"] }
 tracing = "0.1"
+global-hotkey = { workspace = true }

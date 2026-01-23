@@ -21,10 +21,11 @@ repository = "https://github.com/solarpush/region-to-share"
 tokio = { version = "1.40", features = ["full"] }
 async-trait = "0.1"
 
-# Portal/Wayland (pour futur support)
+# Portal/Wayland
+ashpd = { version = "0.9", features = ["pipewire"] }
 zbus = "4.0"
 
-# PipeWire (pour futur support)
+# PipeWire
 pipewire = "0.8"
 libspa = "0.8"
 
@@ -49,6 +50,9 @@ region-config = { path = "crates/region-config" }
 
 # System
 libc = "0.2"
+
+# Keyboard shortcuts (global hotkeys)
+global-hotkey = "0.6"
 
 [profile.dev]
 opt-level = 1

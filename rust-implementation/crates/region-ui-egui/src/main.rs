@@ -97,6 +97,11 @@ impl RegionApp {
             (560, 240, 800, 600)
         };
         
+        // Vérifier si on doit auto-démarrer avec la dernière région
+        let auto_start = config.settings.auto_use_specific_region 
+            && config.settings.remember_last_region 
+            && config.get_last_region().is_some();
+        
         Self {
             x,
             y,
@@ -117,14 +122,56 @@ impl RegionApp {
             screenshot_texture: None,
             selection_ready: false,
             config,
-            streaming_only: false,
+            streaming_only: auto_start,  // Auto-démarrer si configuré
             screenshot_display_rect: None,
-            pending_resize: None,
+            pending_resize: if auto_start { Some((width, height)) } else { None },
             resize_frame_count: 0,
             show_streaming_options: false,
             cpu_usage: 0.0,
             memory_mb: 0.0,
             data_rate_mbps: 0.0,
+        }
+    }
+    
+    /// Detect if running on Wayland.
+    fn is_wayland() -> bool {
+        std::env::var("WAYLAND_DISPLAY").is_ok() 
+            || std::env::var("XDG_SESSION_TYPE").map(|t| t == "wayland").unwrap_or(false)
+    }
+    
+    /// Lower window on X11 using xdotool or wmctrl (fallback methods).
+    fn lower_window_x11() {
+        // Méthode 1: Utiliser xdotool (très commun)
+        if std::process::Command::new("xdotool")
+            .args(["getactivewindow", "windowlower"])
+            .spawn()
+            .is_ok() 
+        {
+            println!("Fenêtre envoyée en arrière-plan via xdotool");
+            return;
+        }
+        
+        // Méthode 2: Utiliser wmctrl
+        if std::process::Command::new("wmctrl")
+            .args(["-r", ":ACTIVE:", "-b", "add,below"])
+            .spawn()
+            .is_ok() 
+        {
+            println!("Fenêtre envoyée en arrière-plan via wmctrl");
+            return;
+        }
+        
+        eprintln!("Impossible d'envoyer en arrière-plan: installez xdotool ou wmctrl");
+    }
+    
+    /// Send window to background (X11) or minimize (Wayland).
+    fn send_to_background(&self, ctx: &egui::Context) {
+        if Self::is_wayland() {
+            // On Wayland, minimize the window (background capture not possible)
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+        } else {
+            // On X11, lower the window
+            Self::lower_window_x11();
         }
     }
     
@@ -321,6 +368,11 @@ impl RegionApp {
         self.selection_start = None;
         self.selection_end = None;
         self.selection_ready = false;
+        
+        // Envoyer en arrière-plan si l'option est activée
+        if self.config.settings.auto_send_to_background {
+            self.send_to_background(ctx);
+        }
         
         // Activer le mode streaming - le stream sera démarré après le resize
         self.streaming_only = true;
@@ -612,8 +664,40 @@ impl eframe::App for RegionApp {
                         );
                     }
                     
-                    // Bouton options en haut à droite (petit, semi-transparent)
+                    // Boutons en haut à droite (options + arrière-plan)
                     let button_size = egui::vec2(28.0, 28.0);
+                    let spacing = 5.0;
+                    
+                    // Bouton arrière-plan (↓) - seulement sur X11
+                    if !Self::is_wayland() {
+                        let bg_button_pos = egui::pos2(
+                            ui.max_rect().right() - button_size.x * 2.0 - spacing * 2.0 - 5.0,
+                            ui.max_rect().top() + 5.0
+                        );
+                        let bg_button_rect = egui::Rect::from_min_size(bg_button_pos, button_size);
+                        
+                        let bg_response = ui.allocate_rect(bg_button_rect, egui::Sense::click());
+                        
+                        let bg_color = if bg_response.hovered() {
+                            egui::Color32::from_rgba_unmultiplied(60, 100, 60, 200)
+                        } else {
+                            egui::Color32::from_rgba_unmultiplied(40, 80, 40, 150)
+                        };
+                        ui.painter().rect_filled(bg_button_rect, 4.0, bg_color);
+                        ui.painter().text(
+                            bg_button_rect.center(),
+                            egui::Align2::CENTER_CENTER,
+                            "↓",
+                            egui::FontId::proportional(16.0),
+                            egui::Color32::WHITE,
+                        );
+                        
+                        if bg_response.clicked() {
+                            Self::lower_window_x11();
+                        }
+                    }
+                    
+                    // Bouton options (⚙)
                     let button_pos = egui::pos2(ui.max_rect().right() - button_size.x - 5.0, ui.max_rect().top() + 5.0);
                     let button_rect = egui::Rect::from_min_size(button_pos, button_size);
                     
@@ -765,9 +849,39 @@ impl eframe::App for RegionApp {
                     }
                 });
                 
+                ui.add_space(5.0);
+                ui.label("🪟 Fenêtre");
+                ui.horizontal(|ui| {
+                    ui.label("Opacité:");
+                    let mut opacity = self.config.settings.window_opacity;
+                    if ui.add(egui::Slider::new(&mut opacity, 0.3..=1.0).show_value(true)).changed() {
+                        self.config.set_window_opacity(opacity);
+                    }
+                });
+                
+                ui.checkbox(&mut self.config.settings.auto_send_to_background, 
+                    "Envoyer en arrière-plan après sélection (X11) / Réduire (Wayland)");
+                
+                ui.add_space(5.0);
+                ui.label("📍 Région");
                 ui.checkbox(&mut self.config.settings.remember_last_region, "Se souvenir de la dernière région");
+                ui.checkbox(&mut self.config.settings.auto_use_specific_region, 
+                    "Utiliser automatiquement la dernière région au démarrage");
+                
+                ui.add_space(5.0);
                 ui.checkbox(&mut self.config.settings.show_performance, "Afficher les performances");
                 
+                ui.add_space(5.0);
+                ui.horizontal(|ui| {
+                    ui.label("Raccourci global:");
+                    let mut shortcut = self.config.settings.global_shortcut.clone();
+                    if ui.text_edit_singleline(&mut shortcut).changed() {
+                        self.config.settings.global_shortcut = shortcut;
+                    }
+                });
+                ui.label("(Ex: Meta+Ctrl+W pour toggle capture)");
+                
+                ui.add_space(10.0);
                 if ui.button("💾 Sauvegarder").clicked() {
                     if let Err(e) = self.config.save() {
                         eprintln!("Erreur: {}", e);

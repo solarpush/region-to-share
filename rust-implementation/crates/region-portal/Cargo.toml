@@ -13,7 +13,9 @@ region-capture = { workspace = true }
 tokio = { workspace = true }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
-zbus = { workspace = true }
+ashpd = { workspace = true }
+pipewire = { workspace = true }
+libspa = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
