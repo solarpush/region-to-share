@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="128" height="128" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+	<!-- Arrière-plan -->
+	<rect width="128" height="128" fill="transparent" />
+	<!-- Icône principale - zone de sélection -->
+	<rect x="20" y="20" width="88" height="88" fill="none" stroke="#0064c8" stroke-width="4" stroke-dasharray="8,4" />
+	<!-- Zone centrale -->
+	<rect x="40" y="40" width="48" height="48" fill="#0064c8" opacity="0.3" />
+	<!-- Coins de redimensionnement -->
+	<rect x="16" y="16" width="8" height="8" fill="#0064c8" />
+	<rect x="104" y="16" width="8" height="8" fill="#0064c8" />
+	<rect x="16" y="104" width="8" height="8" fill="#0064c8" />
+	<rect x="104" y="104" width="8" height="8" fill="#0064c8" />
+	<!-- Texte stylisé -->
+	<text x="64" y="70" font-family="Arial, sans-serif" font-size="12" font-weight="bold" text-anchor="middle" fill="white">
+		SHARE
+	</text>
+</svg>

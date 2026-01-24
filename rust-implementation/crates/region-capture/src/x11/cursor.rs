@@ -20,6 +20,7 @@ pub struct CursorInfo {
 /// Overlay de curseur utilisant XFixes
 pub struct CursorOverlay {
     connection: Arc<RustConnection>,
+    #[allow(dead_code)]
     window: Window,
 }
 

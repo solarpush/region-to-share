@@ -13,3 +13,4 @@ egui = "0.30"
 tokio = { version = "1.49", features = ["full"] }
 tracing = "0.1"
 global-hotkey = { workspace = true }
+x11rb = { workspace = true }

@@ -7,7 +7,7 @@ use region_core::{Rectangle, PixelFormat};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::mpsc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 
 /// PipeWire stream state.
@@ -173,7 +173,7 @@ fn extract_region(frame: &PipeWireFrame, region: &Rectangle) -> Arc<Vec<u8>> {
 fn run_pipewire_loop(
     node_id: u32,
     frame_tx: mpsc::UnboundedSender<PipeWireFrame>,
-    stop_rx: &mut mpsc::UnboundedReceiver<()>,
+    _stop_rx: &mut mpsc::UnboundedReceiver<()>,
     state: Arc<AtomicU64>,
 ) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
     use pipewire as pw;

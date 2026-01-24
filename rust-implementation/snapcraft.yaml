@@ -1,0 +1,227 @@
+name: region-to-share
+base: core24
+version: '2.0.0-beta1'
+summary: Share selected screen regions - Rust edition (beta)
+description: |
+  Region-to-Share allows you to select a specific area of your screen
+  and display it in a window that you can share directly 
+  in your video conferencing applications (Google Meet, Teams, Discord, etc.).
+
+  🚀 Version 2.0 - Complete Rust rewrite!
+  
+  What's new:
+  - Native Rust implementation (no Python dependencies)
+  - Much lower CPU usage (~5% vs ~15% in Python version)
+  - Native Wayland support via XDG Desktop Portal + PipeWire
+  - Native X11 support via x11rb
+  - Modern egui interface (simplified)
+  - Smaller binary size (~70MB vs +300MB in Python version embeded dependencies)
+
+  Features:
+  - Interactive screen region selection
+  - High-performance real-time display
+  - Works on X11 and Wayland (GNOME, KDE, Sway, Hyprland, etc.)
+  - Performance monitoring overlay
+  - Adjustable window opacity
+  - Auto send-to-background mode
+  - Remember last region for quick reuse
+
+  ⚠️ BETA: This is a beta version. Please report issues on GitHub.
+
+grade: devel
+confinement: strict
+
+website: https://github.com/solarpush/region-to-share
+issues: https://github.com/solarpush/region-to-share/issues
+source-code: https://github.com/solarpush/region-to-share
+
+donation:
+  - https://coff.ee/solarpush
+
+platforms:
+  amd64:
+    build-on: [amd64]
+
+apps:
+  region-to-share:
+    command: bin/region-to-share-wrapper
+    desktop: usr/share/applications/region-to-share.desktop
+    plugs:
+      - desktop
+      - desktop-legacy
+      - wayland
+      - x11
+      - opengl
+      - hardware-observe
+      - screen-inhibit-control
+      - home
+      - network
+      - unity7
+      - gsettings
+    environment:
+      # OpenGL - use host drivers
+      LIBGL_DRIVERS_PATH: "/usr/lib/x86_64-linux-gnu/dri:$SNAP/usr/lib/x86_64-linux-gnu/dri"
+      __EGL_VENDOR_LIBRARY_DIRS: "/usr/share/glvnd/egl_vendor.d:$SNAP/usr/share/glvnd/egl_vendor.d"
+
+parts:
+  region-to-share:
+    plugin: rust
+    source: .
+    source-type: local
+    rust-channel: stable
+    rust-features: []
+    build-packages:
+      # Rust build tools
+      - cargo
+      - rustc
+      - pkg-config
+      # For bindgen (PipeWire bindings)
+      - libclang-dev
+      - clang
+      # X11 development
+      - libx11-dev
+      - libxext-dev
+      - libxrandr-dev
+      - libxcursor-dev
+      - libxfixes-dev
+      - libxi-dev
+      - libxinerama-dev
+      # Wayland development
+      - libwayland-dev
+      - libxkbcommon-dev
+      # PipeWire development
+      - libpipewire-0.3-dev
+      - libspa-0.2-dev
+      # OpenGL/Vulkan development
+      - libgl1-mesa-dev
+      - libegl1-mesa-dev
+      # D-Bus for Portal
+      - libdbus-1-dev
+      # Misc
+      - libfontconfig1-dev
+      - libfreetype6-dev
+    stage-packages:
+      # X11 runtime
+      - libx11-6
+      - libxext6
+      - libxrandr2
+      - libxcursor1
+      - libxfixes3
+      - libxi6
+      - libxinerama1
+      - libxcb1
+      - libxcb-render0
+      - libxcb-shape0
+      - libxcb-xfixes0
+      - libxcb-shm0
+      - libxcb-xkb1
+      - libxcb-icccm4
+      - libxcb-image0
+      - libxcb-keysyms1
+      - libxcb-randr0
+      - libxcb-render-util0
+      # Wayland runtime
+      - libwayland-client0
+      - libwayland-cursor0
+      - libwayland-egl1
+      - libxkbcommon0
+      - libxkbcommon-x11-0
+      - xkb-data
+      # PipeWire runtime (client only, daemon on host)
+      - libpipewire-0.3-0
+      - libspa-0.2-modules
+      # OpenGL/Mesa
+      - libgl1-mesa-dri
+      - libegl1
+      - libgles2
+      # D-Bus
+      - libdbus-1-3
+      # Fonts
+      - libfontconfig1
+      - libfreetype6
+      - fonts-dejavu-core
+    override-build: |
+      craftctl default
+      
+      # The rust plugin builds the workspace, find our binary
+      mkdir -p $CRAFT_PART_INSTALL/bin
+      
+      # Copy the release binary
+      if [ -f target/release/region-ui-egui ]; then
+        cp target/release/region-ui-egui $CRAFT_PART_INSTALL/bin/region-to-share-bin
+      else
+        echo "ERROR: region-ui-egui binary not found!"
+        exit 1
+      fi
+      
+      chmod +x $CRAFT_PART_INSTALL/bin/region-to-share-bin
+      
+      # Create wrapper script that sets up display environment
+      cat > $CRAFT_PART_INSTALL/bin/region-to-share-wrapper << 'WRAPPER_EOF'
+      #!/bin/bash
+      
+      # Display detection - works on all distros (Ubuntu, Arch, Manjaro, Mint, Fedora)
+      # These variables are set by the desktop session and passed through snap plugs
+      
+      # Wayland detection (KDE, GNOME Wayland, Sway, Hyprland, etc.)
+      if [ -n "$WAYLAND_DISPLAY" ]; then
+        export WAYLAND_DISPLAY="$WAYLAND_DISPLAY"
+        export XDG_SESSION_TYPE="${XDG_SESSION_TYPE:-wayland}"
+      fi
+      
+      # X11 / XWayland detection
+      if [ -n "$DISPLAY" ]; then
+        export DISPLAY="$DISPLAY"
+        if [ -z "$XDG_SESSION_TYPE" ]; then
+          export XDG_SESSION_TYPE="x11"
+        fi
+      fi
+      
+      # Fallback: try to detect from XDG_SESSION_TYPE if display vars are missing
+      if [ -z "$DISPLAY" ] && [ -z "$WAYLAND_DISPLAY" ]; then
+        # Try common defaults
+        if [ "$XDG_SESSION_TYPE" = "wayland" ]; then
+          export WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-0}"
+          export DISPLAY="${DISPLAY:-:0}"
+        else
+          export DISPLAY="${DISPLAY:-:0}"
+        fi
+      fi
+      
+      # XDG runtime dir (required for Wayland socket)
+      export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+      
+      # XKB keyboard configuration - use snap's data or fallback to host
+      if [ -d "$SNAP/usr/share/X11/xkb" ]; then
+        export XKB_CONFIG_ROOT="$SNAP/usr/share/X11/xkb"
+      else
+        export XKB_CONFIG_ROOT="/usr/share/X11/xkb"
+      fi
+      
+      # OpenGL - prefer host drivers for better performance
+      export LIBGL_DRIVERS_PATH="/usr/lib/x86_64-linux-gnu/dri:$SNAP/usr/lib/x86_64-linux-gnu/dri"
+      export __EGL_VENDOR_LIBRARY_DIRS="/usr/share/glvnd/egl_vendor.d:$SNAP/usr/share/glvnd/egl_vendor.d"
+      
+      # LD_LIBRARY_PATH for snap libraries
+      export LD_LIBRARY_PATH="$SNAP/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH"
+      
+      # Run the actual binary
+      exec "$SNAP/bin/region-to-share-bin" "$@"
+      WRAPPER_EOF
+      chmod +x $CRAFT_PART_INSTALL/bin/region-to-share-wrapper
+
+  desktop-file:
+    plugin: dump
+    source: ./images
+    source-type: local
+    organize:
+      region-to-share.desktop: usr/share/applications/region-to-share.desktop
+      region-to-share-64.png: usr/share/icons/hicolor/64x64/apps/region-to-share.png
+      region-to-share-128.png: usr/share/icons/hicolor/128x128/apps/region-to-share.png
+      region-to-share-512.png: usr/share/icons/hicolor/512x512/apps/region-to-share.png
+      region-to-share.svg: usr/share/icons/hicolor/scalable/apps/region-to-share.svg
+      region-to-share.png: usr/share/pixmaps/region-to-share.png
+    stage:
+      - usr/share/applications/region-to-share.desktop
+      - usr/share/icons/**
+      - usr/share/pixmaps/**

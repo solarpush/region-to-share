@@ -53,6 +53,7 @@ struct RegionApp {
     pending_resize: Option<(u32, u32)>,  // Redimensionnement en attente (width, height)
     resize_frame_count: u32,  // Compteur pour attendre quelques frames avant resize
     show_streaming_options: bool,  // Afficher la modal d'options pendant le streaming
+    pending_send_to_background: bool,  // Envoi en arrière-plan après resize
     // Stats système
     cpu_usage: f64,
     memory_mb: f64,
@@ -102,6 +103,9 @@ impl RegionApp {
             && config.settings.remember_last_region 
             && config.get_last_region().is_some();
         
+        // Capturer avant de move config
+        let auto_send_bg = config.settings.auto_send_to_background;
+        
         Self {
             x,
             y,
@@ -127,6 +131,7 @@ impl RegionApp {
             pending_resize: if auto_start { Some((width, height)) } else { None },
             resize_frame_count: 0,
             show_streaming_options: false,
+            pending_send_to_background: auto_start && auto_send_bg,
             cpu_usage: 0.0,
             memory_mb: 0.0,
             data_rate_mbps: 0.0,
@@ -139,29 +144,46 @@ impl RegionApp {
             || std::env::var("XDG_SESSION_TYPE").map(|t| t == "wayland").unwrap_or(false)
     }
     
-    /// Lower window on X11 using xdotool or wmctrl (fallback methods).
+    /// Lower window on X11 using x11rb directly (no external tools needed for snap).
     fn lower_window_x11() {
-        // Méthode 1: Utiliser xdotool (très commun)
-        if std::process::Command::new("xdotool")
-            .args(["getactivewindow", "windowlower"])
-            .spawn()
-            .is_ok() 
-        {
-            println!("Fenêtre envoyée en arrière-plan via xdotool");
-            return;
+        use x11rb::connection::Connection;
+        use x11rb::protocol::xproto::{ConnectionExt, ConfigureWindowAux, StackMode};
+        
+        // Connecter à X11
+        let (conn, screen_num) = match x11rb::connect(None) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("Erreur connexion X11: {}", e);
+                return;
+            }
+        };
+        
+        let screen = &conn.setup().roots[screen_num];
+        
+        // Obtenir la fenêtre active via _NET_ACTIVE_WINDOW
+        let active_atom = conn.intern_atom(false, b"_NET_ACTIVE_WINDOW").ok()
+            .and_then(|cookie| cookie.reply().ok())
+            .map(|reply| reply.atom);
+        
+        if let Some(atom) = active_atom {
+            if let Ok(reply) = conn.get_property(false, screen.root, atom, x11rb::NONE, 0, 1) {
+                if let Ok(prop) = reply.reply() {
+                    if prop.length > 0 {
+                        if let Some(window_id) = prop.value32().and_then(|mut iter| iter.next()) {
+                            // Envoyer la fenêtre en bas de la pile (lower)
+                            let aux = ConfigureWindowAux::new().stack_mode(StackMode::BELOW);
+                            if conn.configure_window(window_id, &aux).is_ok() {
+                                let _ = conn.flush();
+                                println!("Fenêtre {} envoyée en arrière-plan", window_id);
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
         }
         
-        // Méthode 2: Utiliser wmctrl
-        if std::process::Command::new("wmctrl")
-            .args(["-r", ":ACTIVE:", "-b", "add,below"])
-            .spawn()
-            .is_ok() 
-        {
-            println!("Fenêtre envoyée en arrière-plan via wmctrl");
-            return;
-        }
-        
-        eprintln!("Impossible d'envoyer en arrière-plan: installez xdotool ou wmctrl");
+        eprintln!("Impossible d'envoyer en arrière-plan");
     }
     
     /// Send window to background (X11) or minimize (Wayland).
@@ -369,9 +391,9 @@ impl RegionApp {
         self.selection_end = None;
         self.selection_ready = false;
         
-        // Envoyer en arrière-plan si l'option est activée
+        // Programmer l'envoi en arrière-plan après le resize si l'option est activée
         if self.config.settings.auto_send_to_background {
-            self.send_to_background(ctx);
+            self.pending_send_to_background = true;
         }
         
         // Activer le mode streaming - le stream sera démarré après le resize
@@ -490,6 +512,12 @@ impl eframe::App for RegionApp {
                 // Démarrer le stream maintenant que la fenêtre est redimensionnée
                 if !self.capturing {
                     self.start_capture();
+                }
+                
+                // Envoyer en arrière-plan maintenant que la fenêtre est visible
+                if self.pending_send_to_background {
+                    self.pending_send_to_background = false;
+                    self.send_to_background(ctx);
                 }
             }
             

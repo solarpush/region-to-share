@@ -168,18 +168,6 @@ impl PixelFormat {
             PixelFormat::BGRA8888 | PixelFormat::RGBA8888 | PixelFormat::ARGB8888
         )
     }
-
-    /// Get the DRM fourcc code for this format (used for DMA-BUF).
-    #[cfg(feature = "drm")]
-    pub const fn drm_fourcc(&self) -> u32 {
-        match self {
-            PixelFormat::BGRA8888 => drm_fourcc::DRM_FORMAT_ARGB8888,
-            PixelFormat::RGBA8888 => drm_fourcc::DRM_FORMAT_ABGR8888,
-            PixelFormat::ARGB8888 => drm_fourcc::DRM_FORMAT_BGRA8888,
-            PixelFormat::RGB888 => drm_fourcc::DRM_FORMAT_RGB888,
-            PixelFormat::BGR888 => drm_fourcc::DRM_FORMAT_BGR888,
-        }
-    }
 }
 
 #[cfg(test)]

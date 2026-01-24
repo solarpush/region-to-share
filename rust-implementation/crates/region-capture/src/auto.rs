@@ -1,4 +1,8 @@
 //! Auto backend selector that chooses the best capture method.
+//! 
+//! Note: For Wayland support, use region_portal::PortalBackend directly
+//! from region-ui-egui, as region-portal depends on region-capture
+//! (creating a cyclic dependency if we tried to use it here).
 
 use crate::{CaptureBackend, Capabilities, CaptureError, Frame, Result};
 use region_core::Rectangle;
@@ -8,35 +12,30 @@ use async_trait::async_trait;
 use crate::x11::X11Capture;
 
 /// Automatically selects the best capture backend for the current environment.
+/// 
+/// Currently only supports X11. For Wayland, use region_portal::PortalBackend.
 pub struct AutoBackend {
     inner: Box<dyn CaptureBackend>,
 }
 
 impl AutoBackend {
     /// Create a new auto-selecting backend.
+    /// 
+    /// Returns an error on Wayland - use region_portal::PortalBackend instead.
     pub fn new() -> Result<Self> {
         // Detect the display server
         let session_type = std::env::var("XDG_SESSION_TYPE")
             .unwrap_or_else(|_| "x11".to_string())
             .to_lowercase();
 
-        // Try Wayland/Portal first if on Wayland
+        // On Wayland, caller should use region_portal::PortalBackend directly
         if session_type.contains("wayland") {
-            #[cfg(feature = "portal")]
-            {
-                return Ok(Self {
-                    inner: Box::new(region_portal::PortalBackend::new()),
-                });
-            }
-            #[cfg(not(feature = "portal"))]
-            {
-                return Err(CaptureError::NotAvailable(
-                    "Wayland detected but portal feature not enabled".to_string()
-                ));
-            }
+            return Err(CaptureError::NotAvailable(
+                "Wayland detected - use region_portal::PortalBackend instead".to_string()
+            ));
         }
 
-        // Fall back to X11
+        // X11 backend
         #[cfg(feature = "x11")]
         {
             let x11 = X11Capture::new()?;
