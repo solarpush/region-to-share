@@ -7,6 +7,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use std::sync::Mutex as StdMutex;
 use std::fs;
+use rayon::prelude::*;
 
 fn main() -> Result<(), eframe::Error> {
     let runtime = tokio::runtime::Runtime::new().unwrap();
@@ -460,23 +461,33 @@ impl RegionApp {
     }
     
     fn frame_to_image(&self, frame_data: &FrameData) -> Result<egui::ColorImage, String> {
-        // Conversion BGRA -> RGBA ultra-optimisée avec chunks
         let pixel_count = (frame_data.width * frame_data.height) as usize;
         let data = &*frame_data.data;
         
-        // Pré-allouer avec exact_chunks pour permettre au compilateur d'optimiser
-        let pixels: Vec<egui::Color32> = data.chunks_exact(4)
-            .take(pixel_count)
-            .map(|chunk| {
-                // BGRA -> RGBA : swap B et R, ignorer alpha
-                egui::Color32::from_rgba_unmultiplied(
-                    chunk[2], // R (was B)
-                    chunk[1], // G
-                    chunk[0], // B (was R)
-                    255,      // A opaque
-                )
-            })
-            .collect();
+        // Optimisation: conversion parallèle BGRA -> RGBA avec rayon
+        // Pour les grandes images (> 720p), utiliser le traitement parallèle
+        let pixels: Vec<egui::Color32> = if pixel_count > 500_000 {
+            // Version parallèle - diviser le travail sur tous les cores CPU
+            data.par_chunks_exact(4)
+                .take(pixel_count)
+                .map(|bgra| {
+                    // BGRA -> RGBA : swap B et R, alpha forcé à 255
+                    egui::Color32::from_rgba_unmultiplied(
+                        bgra[2], bgra[1], bgra[0], 255,
+                    )
+                })
+                .collect()
+        } else {
+            // Version séquentielle pour petites images (overhead parallélisation > gain)
+            data.chunks_exact(4)
+                .take(pixel_count)
+                .map(|bgra| {
+                    egui::Color32::from_rgba_unmultiplied(
+                        bgra[2], bgra[1], bgra[0], 255,
+                    )
+                })
+                .collect()
+        };
         
         Ok(egui::ColorImage {
             size: [frame_data.width as usize, frame_data.height as usize],
@@ -948,6 +959,7 @@ async fn capture_task_continuous(
     
     let mut profiler = FrameProfiler::new(30);
     let mut frame_count = 0u32;
+    let mut frames_skipped = 0u32;
     
     // Calculer le temps minimum entre chaque frame
     let frame_duration = std::time::Duration::from_secs_f64(1.0 / target_fps as f64);
@@ -957,12 +969,21 @@ async fn capture_task_continuous(
     let mut total_bytes_sent: u64 = 0;
     let stats_start = std::time::Instant::now();
     
-    println!("Starting continuous stream: {}x{} at ({}, {}) - Target: {} FPS ({:.2}ms/frame)", 
-        region.width, region.height, region.x, region.y, target_fps, frame_duration.as_secs_f64() * 1000.0);
+    // Pré-calculer la taille estimée du buffer pour éviter les réallocations
+    let estimated_buffer_size = (region.width * region.height * 4) as usize;
+    
+    println!("Starting continuous stream: {}x{} at ({}, {}) - Target: {} FPS ({:.2}ms/frame) - Buffer: {}MB", 
+        region.width, region.height, region.x, region.y, target_fps, 
+        frame_duration.as_secs_f64() * 1000.0,
+        estimated_buffer_size / 1_000_000);
+    
+    // Variable pour tracker la dernière frame envoyée (éviter doublons)
+    let mut last_sequence = 0u64;
     
     loop {
         let frame_start = std::time::Instant::now();
         
+        // Check stop signal (non-bloquant)
         if stop_rx.try_recv().is_ok() {
             println!("Stopping stream...");
             let _ = tx.send(StatsUpdate::Stopped);
@@ -971,13 +992,29 @@ async fn capture_task_continuous(
         
         profiler.start_frame();
         
+        // Capture - utilise le backend optimisé
         let capture_start = std::time::Instant::now();
-        let frame = backend.capture_frame().await?;
+        let frame = match backend.capture_frame().await {
+            Ok(f) => f,
+            Err(e) => {
+                eprintln!("Capture error: {}", e);
+                tokio::time::sleep(frame_duration).await;
+                continue;
+            }
+        };
         let capture_time = capture_start.elapsed();
         
         profiler.record_capture(capture_time);
         
         frame_count += 1;
+        
+        // Skip si c'est la même frame (basé sur sequence number)
+        if frame.sequence == last_sequence {
+            frames_skipped += 1;
+            tokio::time::sleep(frame_duration / 2).await;
+            continue;
+        }
+        last_sequence = frame.sequence;
         
         // Calculer la taille des données
         let frame_bytes = if let Some(buffer) = frame.data.as_buffer() {
@@ -987,13 +1024,11 @@ async fn capture_task_continuous(
         };
         total_bytes_sent += frame_bytes;
         
+        // Stats toutes les 10 frames
         if frame_count % 10 == 0 {
             let stats = profiler.stats();
-            
-            // Calculer les stats système
             let (cpu_percent, memory_mb) = resource_monitor.get_stats();
             
-            // Calculer le débit en MB/s
             let elapsed_secs = stats_start.elapsed().as_secs_f64();
             let data_rate_mbps = if elapsed_secs > 0.0 {
                 (total_bytes_sent as f64 / 1_000_000.0) / elapsed_secs
@@ -1011,35 +1046,44 @@ async fn capture_task_continuous(
                 data_rate_mbps,
             });
             
-            // Log périodique dans la console
-            if frame_count % 100 == 0 {
-                println!("[Stats] FPS: {:.1} | CPU: {:.1}% | RAM: {:.1}MB | Débit: {:.2}MB/s | Frames: {}", 
-                    stats.avg_fps, cpu_percent, memory_mb, data_rate_mbps, frame_count);
+            // Log périodique (moins fréquent)
+            if frame_count % 200 == 0 {
+                let skip_rate = if frame_count > 0 { 
+                    (frames_skipped as f64 / frame_count as f64) * 100.0 
+                } else { 0.0 };
+                println!("[Stats] FPS: {:.1} | CPU: {:.1}% | RAM: {:.1}MB | Débit: {:.2}MB/s | Skip: {:.1}% | Frames: {}", 
+                    stats.avg_fps, cpu_percent, memory_mb, data_rate_mbps, skip_rate, frame_count);
             }
         }
         
-        // Envoyer la frame seulement si le receiver peut la traiter
-        // (skip si le channel est surchargé pour éviter l'accumulation)
+        // Envoyer la frame via Arc (zero-copy)
         if let Some(arc_buffer) = frame.data.as_arc_buffer() {
-            // On envoie la frame - Arc::clone ne copie pas les données
             let frame_data = FrameData {
                 width: frame.width,
                 height: frame.height,
-                data: arc_buffer, // Réutilise l'Arc, pas de copie
+                data: arc_buffer,
                 _format: frame.format,
             };
-            // Envoyer et ignorer si échec
             let _ = tx.send(StatsUpdate::Frame(frame_data));
         }
         
-        // Attendre pour respecter le frame rate cible
+        // Frame pacing intelligent
         let elapsed = frame_start.elapsed();
         if elapsed < frame_duration {
-            tokio::time::sleep(frame_duration - elapsed).await;
+            // Utiliser sleep précis pour le frame pacing
+            let sleep_time = frame_duration - elapsed;
+            if sleep_time > std::time::Duration::from_micros(500) {
+                tokio::time::sleep(sleep_time).await;
+            } else {
+                // Spin wait pour précision < 500µs
+                while frame_start.elapsed() < frame_duration {
+                    std::hint::spin_loop();
+                }
+            }
         }
     }
     
-    println!("Stream stopped: {} frames total", frame_count);
+    println!("Stream stopped: {} frames total, {} skipped", frame_count, frames_skipped);
     
     Ok(())
 }
@@ -1048,6 +1092,7 @@ async fn capture_task_continuous(
 struct ResourceMonitor {
     last_cpu_time: u64,
     last_check: std::time::Instant,
+    num_cpus: usize,
 }
 
 impl ResourceMonitor {
@@ -1055,6 +1100,7 @@ impl ResourceMonitor {
         Self {
             last_cpu_time: Self::get_process_cpu_time(),
             last_check: std::time::Instant::now(),
+            num_cpus: Self::get_num_cpus(),
         }
     }
     
@@ -1075,16 +1121,36 @@ impl ResourceMonitor {
         let cpu_delta = current_cpu_time.saturating_sub(self.last_cpu_time);
         let elapsed_ticks = (elapsed.as_secs_f64() * 100.0) as u64; // En centièmes de seconde
         
-        let cpu_percent = if elapsed_ticks > 0 {
+        // CPU par cœur
+        let cpu_per_core = if elapsed_ticks > 0 {
             (cpu_delta as f64 / elapsed_ticks as f64) * 100.0
         } else {
             0.0
         };
         
+        // Normaliser par le nombre de cœurs pour avoir le % du CPU total
+        let cpu_percent = cpu_per_core / self.num_cpus as f64;
+        
         self.last_cpu_time = current_cpu_time;
         self.last_check = std::time::Instant::now();
         
         cpu_percent.min(100.0)
+    }
+    
+    fn get_num_cpus() -> usize {
+        // Lire le nombre de CPUs depuis /proc/cpuinfo
+        if let Ok(cpuinfo) = fs::read_to_string("/proc/cpuinfo") {
+            let count = cpuinfo.lines()
+                .filter(|line| line.starts_with("processor"))
+                .count();
+            if count > 0 {
+                return count;
+            }
+        }
+        // Fallback: utiliser std::thread
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1)
     }
     
     fn get_process_cpu_time() -> u64 {

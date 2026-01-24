@@ -13,4 +13,6 @@ egui = "0.30"
 tokio = { version = "1.49", features = ["full"] }
 tracing = "0.1"
 global-hotkey = { workspace = true }
+crossbeam-channel = "0.5"
+rayon = "1.10"
 x11rb = { workspace = true }
