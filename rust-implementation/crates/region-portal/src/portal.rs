@@ -10,6 +10,7 @@ use ashpd::desktop::screencast::{CursorMode, SourceType, Screencast};
 use ashpd::desktop::PersistMode;
 use ashpd::WindowIdentifier;
 use thiserror::Error;
+use std::os::fd::{OwnedFd, AsRawFd};
 
 /// Portal-specific errors.
 #[derive(Error, Debug)]
@@ -55,6 +56,7 @@ pub struct RestoreToken(pub String);
 pub struct PortalCapture {
     streams: Vec<StreamInfo>,
     restore_token: Option<RestoreToken>,
+    pipewire_fd: Option<OwnedFd>,
 }
 
 impl PortalCapture {
@@ -63,6 +65,7 @@ impl PortalCapture {
         Ok(Self {
             streams: Vec::new(),
             restore_token: None,
+            pipewire_fd: None,
         })
     }
 
@@ -98,6 +101,11 @@ impl PortalCapture {
             .start(&session, &WindowIdentifier::default())
             .await?
             .response()?;
+
+        // Get PipeWire file descriptor - CRITICAL for connecting to the stream
+        let pipewire_fd = screencast.open_pipe_wire_remote(&session).await?;
+        println!("Portal: Got PipeWire fd: {}", pipewire_fd.as_raw_fd());
+        self.pipewire_fd = Some(pipewire_fd);
 
         let streams: Vec<StreamInfo> = response
             .streams()
@@ -139,6 +147,16 @@ impl PortalCapture {
     pub fn node_id(&self) -> Option<u32> {
         self.streams.first().map(|s| s.node_id)
     }
+    
+    /// Get the PipeWire file descriptor (needed for connecting to the stream).
+    pub fn pipewire_fd(&self) -> Option<i32> {
+        self.pipewire_fd.as_ref().map(|fd| fd.as_raw_fd())
+    }
+    
+    /// Take ownership of the PipeWire fd (consumes it).
+    pub fn take_pipewire_fd(&mut self) -> Option<OwnedFd> {
+        self.pipewire_fd.take()
+    }
 
     pub fn is_active(&self) -> bool {
         !self.streams.is_empty()
@@ -146,6 +164,7 @@ impl PortalCapture {
 
     pub async fn close(&mut self) -> Result<(), PortalError> {
         self.streams.clear();
+        self.pipewire_fd = None;
         Ok(())
     }
 }

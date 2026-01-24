@@ -2,12 +2,19 @@ use eframe::egui;
 use region_core::{Rectangle, PixelFormat};
 use region_core::performance::FrameProfiler;
 use region_capture::{CaptureBackend, AutoBackend};
+use region_portal::PortalBackend;
 use region_config::Config;
 use std::sync::Arc;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use std::sync::Mutex as StdMutex;
 use std::fs;
 use rayon::prelude::*;
+
+/// Check if running under Wayland
+fn is_wayland() -> bool {
+    std::env::var("WAYLAND_DISPLAY").is_ok() 
+        || std::env::var("XDG_SESSION_TYPE").map(|t| t == "wayland").unwrap_or(false)
+}
 
 fn main() -> Result<(), eframe::Error> {
     let runtime = tokio::runtime::Runtime::new().unwrap();
@@ -250,19 +257,32 @@ impl RegionApp {
         
         let runtime = self.runtime.clone();
         let ctx_clone = ctx.clone();
+        let use_wayland = is_wayland();
         
         runtime.spawn(async move {
             println!("Démarrage capture screenshot plein écran...");
-            let mut backend = match AutoBackend::new() {
-                Ok(b) => {
-                    println!("Backend créé avec succès");
-                    b
-                },
-                Err(e) => {
-                    eprintln!("Failed to create backend: {}", e);
-                    return;
+            
+            // Create the appropriate backend for the display server
+            let mut backend: Box<dyn CaptureBackend> = if use_wayland {
+                println!("Using Portal backend (Wayland) for screenshot");
+                Box::new(PortalBackend::new())
+            } else {
+                println!("Using X11 backend for screenshot");
+                match AutoBackend::new() {
+                    Ok(b) => Box::new(b),
+                    Err(e) => {
+                        eprintln!("Failed to create backend: {}", e);
+                        return;
+                    }
                 }
             };
+            
+            // Initialize the backend with a full-screen region first (needed for Portal)
+            let init_region = Rectangle::new(0, 0, 1920, 1080);
+            if let Err(e) = backend.init(init_region).await {
+                eprintln!("Failed to initialize backend: {}", e);
+                return;
+            }
             
             // Obtenir la taille réelle de l'écran via le backend (compatible X11 et portal)
             let (screen_width, screen_height) = match backend.get_screen_size().await {
@@ -954,7 +974,14 @@ async fn capture_task_continuous(
         height: region.height.min(2160).max(1),
     };
     
-    let mut backend = AutoBackend::new()?;
+    // Use the appropriate backend for the display server
+    let mut backend: Box<dyn CaptureBackend> = if is_wayland() {
+        println!("Using Portal backend (Wayland)");
+        Box::new(PortalBackend::new())
+    } else {
+        println!("Using X11 backend");
+        Box::new(AutoBackend::new()?)
+    };
     backend.init(region).await?;
     
     let mut profiler = FrameProfiler::new(30);

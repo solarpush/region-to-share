@@ -78,8 +78,12 @@ impl CaptureBackend for PortalBackend {
         
         self.screen_size = (stream_info.width, stream_info.height);
         
-        // Connect to PipeWire
-        let pw_stream = PipeWireStream::connect(stream_info.node_id).await
+        // Get PipeWire fd from portal
+        let pipewire_fd = portal.pipewire_fd()
+            .ok_or_else(|| CaptureError::InitFailed("No PipeWire fd".to_string()))?;
+        
+        // Connect to PipeWire with the portal's fd
+        let pw_stream = PipeWireStream::connect_with_fd(stream_info.node_id, pipewire_fd).await
             .map_err(|e| CaptureError::InitFailed(format!("PipeWire failed: {}", e)))?;
         
         self.portal = Some(portal);
