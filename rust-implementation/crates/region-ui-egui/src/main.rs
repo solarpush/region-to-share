@@ -1076,8 +1076,8 @@ async fn capture_task_continuous(
     let region = Rectangle {
         x: region.x.max(0),
         y: region.y.max(0),
-        width: region.width.min(3840).max(1),
-        height: region.height.min(2160).max(1),
+        width: region.width.clamp(1, 3840),
+        height: region.height.clamp(1, 2160),
     };
     
     // Réutiliser le backend existant ou en créer un nouveau

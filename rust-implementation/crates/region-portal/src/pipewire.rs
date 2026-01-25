@@ -259,10 +259,6 @@ fn run_pipewire_loop_with_fd(
     let frame_tx_clone = frame_tx.clone();
     let state_clone = state.clone();
     
-    // Use Arc<Mutex> to store stream dimensions from param_changed callback
-    let stream_dims = Arc::new(std::sync::Mutex::new((1920u32, 1080u32)));
-    let stream_dims_clone = stream_dims.clone();
-    
     // Stream listener for frame data
     let _listener = stream
         .add_local_listener_with_user_data(())
@@ -461,7 +457,7 @@ fn run_pipewire_loop_with_fd(
                         };
                         
                         if let Some((data, is_dmabuf)) = frame_data {
-                            if stride > 0 && data.len() > 0 {
+                            if stride > 0 && !data.is_empty() {
                                 let bpp = 4;
                                 let width = (stride / bpp) as u32;
                                 let height = (data.len() / stride) as u32;

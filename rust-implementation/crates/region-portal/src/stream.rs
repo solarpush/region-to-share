@@ -1,12 +1,10 @@
 //! Complete Portal backend implementation.
 
 use crate::portal::{PortalCapture, PortalError, RestoreToken};
-use crate::pipewire::{PipeWireStream, StreamState};
-use region_capture::{CaptureBackend, Capabilities, CaptureError, Frame, FrameData, Result};
+use crate::pipewire::PipeWireStream;
+use region_capture::{CaptureBackend, Capabilities, CaptureError, Frame, Result};
 use region_core::{Rectangle, PixelFormat};
 use async_trait::async_trait;
-use std::sync::Arc;
-use std::time::Instant;
 
 /// Portal-based capture backend for Wayland using PipeWire/DmaBuf.
 pub struct PortalBackend {

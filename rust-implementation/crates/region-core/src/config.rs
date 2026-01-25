@@ -4,30 +4,23 @@ use crate::{error::ConfigResult, geometry::Rectangle};
 use serde::{Deserialize, Serialize};
 
 /// Main application configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
     /// Capture configuration.
+    #[serde(default)]
     pub capture: CaptureConfig,
 
     /// Display window configuration.
+    #[serde(default)]
     pub display: DisplayConfig,
 
     /// Performance configuration.
+    #[serde(default)]
     pub performance: PerformanceConfig,
 
     /// UI preferences.
+    #[serde(default)]
     pub ui: UiConfig,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            capture: CaptureConfig::default(),
-            display: DisplayConfig::default(),
-            performance: PerformanceConfig::default(),
-            ui: UiConfig::default(),
-        }
-    }
 }
 
 /// Capture backend configuration.

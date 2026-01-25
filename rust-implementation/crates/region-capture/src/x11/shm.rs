@@ -196,7 +196,7 @@ impl X11ShmCapture {
     /// Fallback vers GetImage (plus lent mais plus stable)
     async fn capture_getimage(&mut self) -> Result<Frame> {
         let reply = self.connection.get_image(
-            ImageFormat::Z_PIXMAP.into(),
+            ImageFormat::Z_PIXMAP,
             self.window,
             self.region.x as i16,
             self.region.y as i16,
@@ -229,7 +229,7 @@ impl X11ShmCapture {
         match screen.root_depth {
             24 | 32 => Ok(PixelFormat::BGRA8888),
             _ => Err(CaptureError::UnsupportedFormat(
-                format!("Profondeur de couleur non supportée: {}", screen.root_depth).into()
+                format!("Profondeur de couleur non supportée: {}", screen.root_depth)
             )),
         }
     }
@@ -238,10 +238,8 @@ impl X11ShmCapture {
 impl Drop for X11ShmCapture {
     fn drop(&mut self) {
         // Détacher les segments du serveur X
-        for segment in &self.segments {
-            if let Some(seg) = segment {
-                let _ = self.connection.shm_detach(seg.seg);
-            }
+        for seg in self.segments.iter().flatten() {
+            let _ = self.connection.shm_detach(seg.seg);
         }
         let _ = self.connection.flush();
     }

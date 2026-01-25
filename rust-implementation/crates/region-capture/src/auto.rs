@@ -39,9 +39,9 @@ impl AutoBackend {
         #[cfg(feature = "x11")]
         {
             let x11 = X11Capture::new()?;
-            return Ok(Self {
+            Ok(Self {
                 inner: Box::new(x11),
-            });
+            })
         }
 
         #[cfg(not(feature = "x11"))]
