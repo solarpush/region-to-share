@@ -1,169 +1,220 @@
-# Region to Share 📺
+# Region to Share
 
-[![region-to-share](https://snapcraft.io/region-to-share/badge.svg)](https://snapcraft.io/region-to-share)
+<p align="center">
+  <img src="images/region-to-share-512.png" alt="Region to Share" width="128">
+</p>
 
-A simple and efficient Linux application for sharing specific areas of your screen in video calls (Google Meet, Teams, Discord, etc.).
+**Share any region of your screen in video calls** - A lightweight, native screen region capture tool for Linux.
 
-## 🚀 Features
+[![Snap Status](https://snapcraft.io/region-to-share/badge.svg)](https://snapcraft.io/region-to-share)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-- ✅ **Interactive area selection** with click and drag
-- ✅ **Real-time display window** (30 FPS) of the selected area
-- ✅ **Direct sharing** in video conferencing apps via "Share window"
-- ✅ **Intuitive controls**: Pause/Resume, Refresh
-- ✅ **Cursor visibility** in captured area
-- ✅ **Exact window ratio** without white borders
-- ✅ **Compatible** with all Linux distributions (X11/Wayland)
-- ✅ **Lightweight and fast**: No complex dependencies
+## What is Region to Share?
 
-## 🎯 How it works
+Region to Share allows you to select a specific area of your screen and display it in a resizable window. This window can then be shared in video conferencing apps like **Google Meet**, **Discord**, **Microsoft Teams**, **Zoom**, or **OBS**.
 
-1. **Launch the application** → Select a screen area
-2. **A window opens** → Shows real-time content of this area
-3. **In your video app** → "Share screen" → "Window" → Select "Region to Share"
-4. **✅ You share only this area!**
+Perfect for:
 
-## 📋 Requirements
+- 👨‍🏫 Sharing only part of your screen during presentations
+- 🎮 Streaming a specific game window or region
+- 💻 Showing code without revealing the rest of your desktop
+- 🖥️ Multi-monitor setups where you only want to share a portion
 
-- Linux (any modern distribution)
-- Python 3.8+
-- PyQt5 (installed automatically)
+## Features
 
-## Usage
+- 🖱️ **Interactive region selection** - Click and drag to select any screen area
+- ⚡ **High performance** - Native Rust implementation with ~5% CPU usage
+- 🐧 **Works everywhere** - X11 and Wayland (GNOME, KDE, Sway, Hyprland, etc.)
+- 📊 **Performance overlay** - Optional FPS and resource monitoring
+- 🔄 **Remember last region** - Quick reuse of previous selection
+- 🪟 **Adjustable opacity** - Make the window semi-transparent
+- ⬇️ **Auto send-to-background** - Keep it out of the way while streaming
+- 🔧 **Debug mode** - `--debug` flag for troubleshooting
 
-```bash
-region-to-share --help #to display all supported commands
+## Installation
 
-#output
-usage: main.py [-h] [--mode {auto,portal-screencast,mss}] [--debug] [--config] [--perf]
-               [--frame-rate FRAME_RATE] [--opacity OPACITY] [--auto-background] [--remember-region]
-               [--auto-use-region] [--version]
-
-Region-to-Share: Select and share screen regions for video conferencing
-
-options:
-  -h, --help            show this help message and exit
-  --mode {auto,portal-screencast,mss}, --capture-mode {auto,portal-screencast,mss}
-                        Force a specific capture method (default: auto-detect)
-  --debug               Enable debug output
-  --config              Open configuration dialog only (don't start capture)
-  --perf                Enable performance monitoring and display FPS/timing stats
-  --frame-rate FRAME_RATE, --fps FRAME_RATE
-                        Set maximum frame rate (FPS) for capture (default: from settings)
-  --opacity OPACITY     Set window opacity (0.1-1.0, default: from settings)
-  --auto-background     Automatically send window to background after capture starts
-  --remember-region     Remember and offer to reuse the last selected region
-  --auto-use-region     Automatically use the last region without asking (requires --remember-region)
-  --version             show program's version number and exit
-
-Examples:
-  region-to-share                    # Auto-detect best method
-  region-to-share --config           # Open settings dialog only
-  region-to-share --mode portal-screencast  # Force Portal ScreenCast
-  region-to-share --mode mss         # Force MSS capture
-  region-to-share --frame-rate 60    # Set 60 FPS capture
-  region-to-share --perf --fps 15    # 15 FPS with performance monitoring
-  region-to-share --opacity 0.5 --auto-background  # Semi-transparent, auto-background
-  region-to-share --remember-region --auto-use-region  # Reuse last region automatically
-```
-
-## 🔧 Installation
-
-### Via Snap Store (recommended)
+### Snap (Recommended)
 
 ```bash
-# Install from Snap Store
 sudo snap install region-to-share
 ```
 
-### From source code
+### Build from Source
+
+#### Prerequisites
+
+**Ubuntu/Debian:**
+
+```bash
+sudo apt install -y \
+  cargo rustc pkg-config \
+  libclang-dev clang \
+  libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxinerama-dev \
+  libwayland-dev libxkbcommon-dev \
+  libpipewire-0.3-dev libspa-0.2-dev \
+  libgl1-mesa-dev libegl1-mesa-dev \
+  libdbus-1-dev libfontconfig1-dev libfreetype6-dev
+```
+
+**Fedora:**
+
+```bash
+sudo dnf install -y \
+  cargo rust pkg-config \
+  clang-devel clang \
+  libX11-devel libXext-devel libXrandr-devel libXcursor-devel libXfixes-devel libXi-devel libXinerama-devel \
+  wayland-devel libxkbcommon-devel \
+  pipewire-devel \
+  mesa-libGL-devel mesa-libEGL-devel \
+  dbus-devel fontconfig-devel freetype-devel
+```
+
+**Arch Linux:**
+
+```bash
+sudo pacman -S --needed \
+  rust clang pkgconf \
+  libx11 libxext libxrandr libxcursor libxfixes libxi libxinerama \
+  wayland libxkbcommon \
+  pipewire \
+  mesa \
+  dbus fontconfig freetype2
+```
+
+#### Build
 
 ```bash
 # Clone the repository
 git clone https://github.com/solarpush/region-to-share.git
 cd region-to-share
 
-# Setup virtual environment
-./run_venv.sh
+# Build in release mode
+cargo build --release
+
+# Run
+./target/release/region-ui-egui
 ```
 
-## 🎯 Usage
-
-### Launch
-
-```bash
-./run.sh
-```
-
-### Simple steps
-
-1. **Launch the application**: `./run.sh`
-2. **Select a region**: Click and drag on your screen
-3. **Display window**: A window opens with your region in real-time
-4. **Share in video conference**:
-   - Google Meet/Teams/Discord: "Share screen" → "Window"
-   - Select "Region to Share - Selected Region"
-   - ✅ You share only this region!
-
-### Controls
-
-- **⏸️ Pause/▶️ Resume**: Stop/resume capture
-- **🔄 Refresh**: Force update
-- **❌ Close**: Close application
-
-## 🛠️ Architecture
-
-```txt
-region_to_share/
-├── main.py              # Main entry point
-├── screen_selector.py   # Interactive region selection
-├── display_window.py    # Real-time display window
-└── __init__.py          # Python package
-```
-
-### Technologies
-
-- **PyQt5**: Modern graphical interface
-- **mss**: High-performance screen capture (x11)
-- **xdg_portal**: wayland portal api (wayland)
-- **OpenCV + NumPy**: Efficient image processing
-- **Snapcraft**: Universal Linux packaging
-
-## 📦 Snap Package
-
-### Building the snap (for try packing before send PR)
+#### Build Snap Package
 
 ```bash
 # Install snapcraft
 sudo snap install snapcraft --classic
 
 # Build the snap
-snapcraft #optional use --use-lxd
+snapcraft
 
-# Install
-sudo snap install --devmode *.snap
+# Install locally
+sudo snap install --dangerous region-to-share_*.snap
 ```
 
-## 🤝 Contributing
+## Usage
 
-1. Fork the project
-2. Create a feature branch
-3. Commit your changes
-4. Create a Pull Request
+### Basic Usage
 
-You can extend capture support for different Linux desktop environments by editing `./region_to_share/universal_capture.py`.
-Currently supported XDG_SESSION_TYPE values:
+1. Launch **Region to Share**
+2. Click **"Select a region"**
+3. A screenshot overlay appears - click and drag to select your area
+4. Press **Enter** or release the mouse to confirm
+5. The selected region now appears in a resizable window
+6. Share this window in your video conferencing app
 
-- `wayland`: Uses the `xdg-desktop-portal` API for screen capture. Ensure that the appropriate backend (e.g., `xdg-desktop-portal-kde` for KDE or `xdg-desktop-portal-gnome` for GNOME) is installed and running. Compatibility may vary depending on the compositor (e.g., KWin for KDE, Mutter for GNOME).
-- `x11`: Relies on the `mss` library for screen capture. This works well with most X11-based environments but may encounter issues with minimal window managers or restricted X11 configurations.
+### Command Line Options
 
-Other session types (e.g. `mir`, `tty`) are not supported yet, but contributions are welcome! For example, adding support for `mir` would require implementing a Mir-specific API, and `tty` would need a different approach entirely.
+```bash
+region-to-share [OPTIONS]
 
-## 📄 License
+Options:
+  -d, --debug    Enable debug logging
+  -v, --verbose  Enable verbose/trace logging (more detailed than debug)
+  -h, --help     Print help
+  -V, --version  Print version
+```
 
-MIT License - see the [LICENSE](LICENSE) file for details.
+### Settings
+
+- **Frame Rate** - Adjust from 15 to 120 FPS
+- **Window Opacity** - Make the streaming window semi-transparent
+- **Auto send-to-background** - Automatically lower the window after selection (X11) or minimize (Wayland)
+- **Remember last region** - Save and quickly reuse your last selection
+- **Show performance** - Display FPS, CPU, and memory usage
+
+## Architecture
+
+Region to Share is built as a Rust workspace with multiple crates:
+
+```
+crates/
+├── region-core/      # Core types: Rectangle, Frame, PixelFormat
+├── region-capture/   # Capture abstraction + X11 backend (XShm)
+├── region-portal/    # Wayland backend: Portal + PipeWire + DmaBuf
+├── region-config/    # Configuration management
+└── region-ui-egui/   # GUI application (egui)
+```
+
+### Display Server Support
+
+| Feature           | X11              | Wayland                    |
+| ----------------- | ---------------- | -------------------------- |
+| Screen capture    | XShm (zero-copy) | Portal + PipeWire + DmaBuf |
+| Cursor capture    | XFixes           | Embedded in stream         |
+| Window management | Native           | Portal-based               |
+
+## Troubleshooting
+
+### Debug Mode
+
+Run with debug logging to diagnose issues:
+
+```bash
+region-to-share --debug
+```
+
+For even more detail:
+
+```bash
+region-to-share --verbose
+```
+
+### Common Issues
+
+**Wayland: "User cancelled" or no permission dialog**
+
+- Make sure your compositor supports the ScreenCast portal
+- Try running from a terminal to see error messages
+
+**X11: Black screen or no capture**
+
+- Ensure you have the XShm extension enabled
+- Check that your X server allows shared memory
+
+**Snap: Permission issues**
+
+- The snap auto-connects required interfaces, but you can manually connect:
+  ```bash
+  snap connect region-to-share:pipewire
+  snap connect region-to-share:screencast-legacy
+  ```
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## Support
+
+- 🐛 [Report bugs](https://github.com/solarpush/region-to-share/issues)
+- ☕ [Buy me a coffee](https://coff.ee/solarpush)
 
 ---
 
-**Region to Share** - Simplified screen region sharing for Linux 🐧
-
-[![region-to-share](https://snapcraft.io/region-to-share/badge.svg)](https://snapcraft.io/region-to-share)
+Made with ❤️ for the Linux community
