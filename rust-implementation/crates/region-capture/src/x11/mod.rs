@@ -7,6 +7,7 @@ pub use shm::X11ShmCapture;
 pub use cursor::CursorOverlay;
 
 use crate::{CaptureBackend, CaptureError, Capabilities, Frame, Result};
+use log::{debug, info, trace};
 use region_core::{Rectangle, PixelFormat};
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -26,11 +27,15 @@ pub struct X11Capture {
 impl X11Capture {
     /// Crée un nouveau backend X11
     pub fn new() -> Result<Self> {
+        debug!("[X11Capture] Connecting to X11 display...");
         let (conn, screen_num) = RustConnection::connect(None)
             .map_err(|e| CaptureError::InitFailed(format!("Connexion X11 échouée: {}", e)))?;
         
         let connection = Arc::new(conn);
         let screen = connection.setup().roots[screen_num].clone();
+
+        info!("[X11Capture] Connected to screen {}: {}x{}", 
+            screen_num, screen.width_in_pixels, screen.height_in_pixels);
 
         Ok(Self {
             connection,
@@ -65,12 +70,15 @@ impl X11Capture {
 #[async_trait]
 impl CaptureBackend for X11Capture {
     async fn init(&mut self, region: Rectangle) -> Result<()> {
+        debug!("[X11Capture] Initializing with region: {:?}", region);
+        
         // Vérifier XShm
         if !self.check_xshm_support() {
             return Err(CaptureError::InitFailed(
                 "Extension XShm non disponible".to_string()
             ));
         }
+        debug!("[X11Capture] XShm extension available");
 
         // Initialiser la capture XShm
         self.shm_capture = Some(X11ShmCapture::new(
@@ -78,15 +86,18 @@ impl CaptureBackend for X11Capture {
             self.screen.root,
             region,
         )?);
+        debug!("[X11Capture] XShm capture initialized");
 
         // Initialiser le curseur si XFixes est disponible
         if self.check_xfixes_support() {
+            debug!("[X11Capture] XFixes extension available, initializing cursor overlay");
             self.cursor_overlay = Some(CursorOverlay::new(
                 self.connection.clone(),
                 self.screen.root,
             )?);
         }
 
+        info!("[X11Capture] Initialization complete");
         Ok(())
     }
 
@@ -96,6 +107,7 @@ impl CaptureBackend for X11Capture {
 
         // Capture via XShm
         let mut frame = shm.capture_frame().await?;
+        trace!("[X11Capture] Captured frame: {}x{}", frame.width, frame.height);
 
         // Ajouter le curseur si demandé
         if self.show_cursor {

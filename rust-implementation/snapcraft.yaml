@@ -58,6 +58,12 @@ apps:
       - network
       - unity7
       - gsettings
+      # Portal/PipeWire for Wayland screen capture
+      - screencast-legacy
+      - pipewire
+      # Audio interfaces often required for full PipeWire access
+      - audio-playback
+      - audio-record
     environment:
       # OpenGL - use host drivers
       LIBGL_DRIVERS_PATH: "/usr/lib/x86_64-linux-gnu/dri:$SNAP/usr/lib/x86_64-linux-gnu/dri"
@@ -130,10 +136,14 @@ parts:
       # PipeWire runtime (client only, daemon on host)
       - libpipewire-0.3-0
       - libspa-0.2-modules
-      # OpenGL/Mesa
+      - pipewire  # Contains client.conf and other config files
+      # OpenGL/Mesa/EGL for DmaBuf import
       - libgl1-mesa-dri
       - libegl1
       - libgles2
+      - libgbm1
+      - libglvnd0
+      - libegl-mesa0
       # D-Bus
       - libdbus-1-3
       # Fonts
@@ -209,6 +219,15 @@ parts:
       # OpenGL - prefer host drivers for better performance
       export LIBGL_DRIVERS_PATH="/usr/lib/x86_64-linux-gnu/dri:$SNAP/usr/lib/x86_64-linux-gnu/dri"
       export __EGL_VENDOR_LIBRARY_DIRS="/usr/share/glvnd/egl_vendor.d:$SNAP/usr/share/glvnd/egl_vendor.d"
+      
+      # PipeWire - use snap's plugins and config, connect to host daemon
+      export PIPEWIRE_RUNTIME_DIR="$REAL_XDG_RUNTIME_DIR"
+      export SPA_PLUGIN_DIR="$SNAP/usr/lib/x86_64-linux-gnu/spa-0.2"
+      export PIPEWIRE_MODULE_DIR="$SNAP/usr/lib/x86_64-linux-gnu/pipewire-0.3"
+      export PIPEWIRE_CONFIG_DIR="$SNAP/usr/share/pipewire"
+      
+      # D-Bus for Portal communication
+      export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=$REAL_XDG_RUNTIME_DIR/bus}"
       
       # LD_LIBRARY_PATH for snap libraries
       export LD_LIBRARY_PATH="$SNAP/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH"

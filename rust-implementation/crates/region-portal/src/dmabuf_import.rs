@@ -52,17 +52,14 @@ impl DmaBufImporter {
             .ok_or("Failed to get EGL display")?;
 
         // Initialize EGL
-        let (major, minor) = egl
+        let (_major, _minor) = egl
             .initialize(display)
             .map_err(|e| format!("Failed to initialize EGL: {:?}", e))?;
-        println!("EGL initialized: {}.{}", major, minor);
 
         // Check for required extensions
         let extensions = egl.query_string(Some(display), khronos_egl::EXTENSIONS)
             .map_err(|e| format!("Failed to query extensions: {:?}", e))?
             .to_string_lossy();
-        
-        println!("EGL Extensions: {}", extensions);
         
         if !extensions.contains("EGL_EXT_image_dma_buf_import") {
             return Err("EGL_EXT_image_dma_buf_import not supported".to_string());
@@ -134,8 +131,6 @@ impl DmaBufImporter {
         let mut framebuffer = 0u32;
         gl::GenTextures(1, &mut texture);
         gl::GenFramebuffers(1, &mut framebuffer);
-
-        println!("DmaBufImporter: Created texture {} and framebuffer {}", texture, framebuffer);
 
         Ok(Self {
             egl,

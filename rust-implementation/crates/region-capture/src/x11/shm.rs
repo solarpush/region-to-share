@@ -121,12 +121,6 @@ impl X11ShmCapture {
         let seg1 = ShmSegment::new(&connection, buffer_size).ok();
         
         let use_shm = seg0.is_some() && seg1.is_some();
-        
-        if use_shm {
-            println!("[XShm] Double-buffering activé: 2x{}MB", buffer_size / 1_000_000);
-        } else {
-            println!("[X11] Fallback vers GetImage (XShm non disponible)");
-        }
 
         Ok(Self {
             connection,

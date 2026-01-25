@@ -5,6 +5,7 @@
 //! (creating a cyclic dependency if we tried to use it here).
 
 use crate::{CaptureBackend, Capabilities, CaptureError, Frame, Result};
+use log::{debug, info, warn};
 use region_core::Rectangle;
 use async_trait::async_trait;
 
@@ -28,8 +29,11 @@ impl AutoBackend {
             .unwrap_or_else(|_| "x11".to_string())
             .to_lowercase();
 
+        debug!("[AutoBackend] Detected session type: {}", session_type);
+
         // On Wayland, caller should use region_portal::PortalBackend directly
         if session_type.contains("wayland") {
+            warn!("[AutoBackend] Wayland detected - use region_portal::PortalBackend instead");
             return Err(CaptureError::NotAvailable(
                 "Wayland detected - use region_portal::PortalBackend instead".to_string()
             ));
@@ -38,6 +42,7 @@ impl AutoBackend {
         // X11 backend
         #[cfg(feature = "x11")]
         {
+            info!("[AutoBackend] Using X11 capture backend");
             let x11 = X11Capture::new()?;
             Ok(Self {
                 inner: Box::new(x11),

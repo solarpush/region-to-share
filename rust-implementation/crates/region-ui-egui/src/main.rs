@@ -10,6 +10,21 @@ use tokio::sync::Mutex as TokioMutex;
 use std::sync::Mutex as StdMutex;
 use std::fs;
 use rayon::prelude::*;
+use clap::Parser;
+use log::{debug, info, error, trace};
+
+/// Region to Share - Screen region capture and streaming tool
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    /// Enable debug logging
+    #[arg(short, long)]
+    debug: bool,
+    
+    /// Enable verbose/trace logging (more detailed than debug)
+    #[arg(short, long)]
+    verbose: bool,
+}
 
 /// Check if running under Wayland
 fn is_wayland() -> bool {
@@ -18,6 +33,26 @@ fn is_wayland() -> bool {
 }
 
 fn main() -> Result<(), eframe::Error> {
+    let args = Args::parse();
+    
+    // Initialize logger based on flags
+    let log_level = if args.verbose {
+        log::LevelFilter::Trace
+    } else if args.debug {
+        log::LevelFilter::Debug
+    } else {
+        log::LevelFilter::Warn
+    };
+    
+    env_logger::Builder::new()
+        .filter_level(log_level)
+        .format_timestamp_millis()
+        .init();
+    
+    info!("Region to Share v{}", env!("CARGO_PKG_VERSION"));
+    debug!("Debug logging enabled");
+    debug!("Session type: {}", if is_wayland() { "Wayland" } else { "X11" });
+    
     let runtime = tokio::runtime::Runtime::new().unwrap();
 
     let options = eframe::NativeOptions {
@@ -63,6 +98,7 @@ struct RegionApp {
     resize_frame_count: u32,  // Compteur pour attendre quelques frames avant resize
     show_streaming_options: bool,  // Afficher la modal d'options pendant le streaming
     pending_send_to_background: bool,  // Envoi en arrière-plan après resize
+    background_delay_frames: u32,  // Délai en frames avant minimisation
     // Backend Portal réutilisable (garde la session ouverte)
     portal_backend: Arc<TokioMutex<Option<Box<dyn CaptureBackend>>>>,
     // Stats système
@@ -102,8 +138,6 @@ impl RegionApp {
         
         // Charger la dernière région si disponible
         let (x, y, width, height) = if let Some(last_region) = config.get_last_region() {
-            println!("Chargement de la dernière région: {}x{} at ({}, {})", 
-                last_region.width, last_region.height, last_region.x, last_region.y);
             (last_region.x, last_region.y, last_region.width, last_region.height)
         } else {
             (560, 240, 800, 600)
@@ -143,6 +177,7 @@ impl RegionApp {
             resize_frame_count: 0,
             show_streaming_options: false,
             pending_send_to_background: auto_start && auto_send_bg,
+            background_delay_frames: 0,
             portal_backend: Arc::new(TokioMutex::new(None)),
             cpu_usage: 0.0,
             memory_mb: 0.0,
@@ -164,10 +199,7 @@ impl RegionApp {
         // Connecter à X11
         let (conn, screen_num) = match x11rb::connect(None) {
             Ok(c) => c,
-            Err(e) => {
-                eprintln!("Erreur connexion X11: {}", e);
-                return;
-            }
+            Err(_) => return,
         };
         
         let screen = &conn.setup().roots[screen_num];
@@ -186,7 +218,6 @@ impl RegionApp {
                             let aux = ConfigureWindowAux::new().stack_mode(StackMode::BELOW);
                             if conn.configure_window(window_id, &aux).is_ok() {
                                 let _ = conn.flush();
-                                println!("Fenêtre {} envoyée en arrière-plan", window_id);
                                 return;
                             }
                         }
@@ -194,8 +225,6 @@ impl RegionApp {
                 }
             }
         }
-        
-        eprintln!("Impossible d'envoyer en arrière-plan");
     }
     
     /// Send window to background (X11) or minimize (Wayland).
@@ -237,7 +266,7 @@ impl RegionApp {
             let existing_backend = portal_backend_arc.lock().await.take();
             
             if let Err(e) = capture_task_continuous(region, frame_rate, new_tx, stop_rx, existing_backend).await {
-                eprintln!("Capture error: {}", e);
+                error!("[Capture] Error: {}", e);
             }
         });
     }
@@ -270,73 +299,44 @@ impl RegionApp {
         let portal_backend_arc = self.portal_backend.clone();
         
         runtime.spawn(async move {
-            println!("Démarrage capture screenshot plein écran...");
-            
             // Create the appropriate backend for the display server
             let mut backend: Box<dyn CaptureBackend> = if use_wayland {
-                println!("Using Portal backend (Wayland) for screenshot");
                 Box::new(PortalBackend::new())
             } else {
-                println!("Using X11 backend for screenshot");
                 match AutoBackend::new() {
                     Ok(b) => Box::new(b),
-                    Err(e) => {
-                        eprintln!("Failed to create backend: {}", e);
-                        return;
-                    }
+                    Err(_) => return,
                 }
             };
             
             // Initialize the backend with a full-screen region first (needed for Portal)
-            // Ceci affiche le dialogue Portal si on est sur Wayland
-            // L'utilisateur doit accepter le partage ici
             let init_region = Rectangle::new(0, 0, 1920, 1080);
-            if let Err(e) = backend.init(init_region).await {
-                eprintln!("Failed to initialize backend: {}", e);
+            if backend.init(init_region).await.is_err() {
                 return;
             }
             
-            // Obtenir la taille réelle de l'écran via le backend (compatible X11 et portal)
-            let (screen_width, screen_height) = match backend.get_screen_size().await {
-                Ok(size) => {
-                    println!("Taille de l'écran détectée: {}x{}", size.0, size.1);
-                    size
-                },
-                Err(e) => {
-                    eprintln!("Impossible d'obtenir la taille de l'écran: {}", e);
-                    (1920, 1080) // Fallback
-                }
-            };
+            // Obtenir la taille réelle de l'écran via le backend
+            let (screen_width, screen_height) = backend.get_screen_size().await
+                .unwrap_or((1920, 1080));
+            let _ = (screen_width, screen_height); // Used for reference
             
-            // Utiliser capture_screenshot pour capturer TOUT l'écran
-            println!("Capture du screenshot {}x{}...", screen_width, screen_height);
-            match backend.capture_screenshot().await {
-                Ok(frame) => {
-                    println!("Screenshot capturé: {}x{}", frame.width, frame.height);
-                    if let Some(arc_buffer) = frame.data.as_arc_buffer() {
-                        let frame_data = FrameData {
-                            width: frame.width,
-                            height: frame.height,
-                            data: arc_buffer,
-                            format: frame.format,
-                        };
-                        println!("Envoi du screenshot via channel...");
-                        let _ = new_tx.send(StatsUpdate::Screenshot(frame_data));
-                        
-                        // Stocker le backend pour réutilisation (évite un nouveau dialogue Portal)
-                        if use_wayland {
-                            println!("Sauvegarde du backend Portal pour réutilisation...");
-                            *portal_backend_arc.lock().await = Some(backend);
-                        }
-                        
-                        ctx_clone.request_repaint();
-                        println!("Screenshot envoyé et repaint demandé");
-                    } else {
-                        eprintln!("Pas de buffer dans la frame");
+            // Capturer tout l'écran
+            if let Ok(frame) = backend.capture_screenshot().await {
+                if let Some(arc_buffer) = frame.data.as_arc_buffer() {
+                    let frame_data = FrameData {
+                        width: frame.width,
+                        height: frame.height,
+                        data: arc_buffer,
+                        format: frame.format,
+                    };
+                    let _ = new_tx.send(StatsUpdate::Screenshot(frame_data));
+                    
+                    // Stocker le backend pour réutilisation (évite un nouveau dialogue Portal)
+                    if use_wayland {
+                        *portal_backend_arc.lock().await = Some(backend);
                     }
-                },
-                Err(e) => {
-                    eprintln!("Échec de la capture de screenshot: {}", e);
+                    
+                    ctx_clone.request_repaint();
                 }
             }
         });
@@ -348,7 +348,6 @@ impl RegionApp {
             let (screenshot_width, screenshot_height) = if let Some(texture) = &self.screenshot_texture {
                 (texture.size()[0] as f32, texture.size()[1] as f32)
             } else {
-                println!("ERREUR: Pas de screenshot texture!");
                 return;
             };
             
@@ -356,28 +355,18 @@ impl RegionApp {
             let display_rect = if let Some(rect) = self.screenshot_display_rect {
                 rect
             } else {
-                println!("ERREUR: Pas de display rect sauvegardé!");
                 return;
             };
             
             // Obtenir le facteur de scaling DPI
             let pixels_per_point = ctx.pixels_per_point();
-            
-            println!("\n=== DEBUG SELECTION ===");
-            println!("Screenshot réel: {}x{}", screenshot_width, screenshot_height);
-            println!("Display rect (points logiques): {:?}", display_rect);
-            println!("Pixels per point (DPI scale): {}", pixels_per_point);
-            println!("Sélection start: {:?}, end: {:?}", start, end);
+            let _ = pixels_per_point; // Used for DPI calculations
             
             // Calculer le ratio de scaling exact
             let scale_x = screenshot_width / display_rect.width();
             let scale_y = screenshot_height / display_rect.height();
             
-            println!("Scale ratio: X={:.4}, Y={:.4}", scale_x, scale_y);
-            
-            // Convertir les coordonnées de sélection (dans l'espace display_rect)
-            // vers les coordonnées réelles du screenshot
-            // Les coordonnées sont relatives au display_rect.min
+            // Convertir les coordonnées de sélection vers les coordonnées réelles
             let rel_min_x = (start.x.min(end.x) - display_rect.min.x).max(0.0);
             let rel_min_y = (start.y.min(end.y) - display_rect.min.y).max(0.0);
             let rel_max_x = (start.x.max(end.x) - display_rect.min.x).min(display_rect.width());
@@ -389,7 +378,7 @@ impl RegionApp {
             let max_x = (rel_max_x * scale_x).round();
             let max_y = (rel_max_y * scale_y).round();
             
-            // Calculer les dimensions de la région sélectionnée dans l'espace réel
+            // Calculer les dimensions de la région sélectionnée
             let region_width = (max_x - min_x).max(1.0);
             let region_height = (max_y - min_y).max(1.0);
             
@@ -398,30 +387,21 @@ impl RegionApp {
             self.width = region_width as u32;
             self.height = region_height as u32;
             
-            println!("Region selectionnee (pixels reels): {}x{} at ({}, {})", self.width, self.height, self.x, self.y);
-            
             // Sauvegarder la région si l'option est activée
             if self.config.settings.remember_last_region {
                 self.config.set_last_region(self.x, self.y, self.width, self.height);
-                if let Err(e) = self.config.save() {
-                    eprintln!("Erreur lors de la sauvegarde de la config: {}", e);
-                }
+                let _ = self.config.save();
             }
             
             // Sortir du plein écran
-            println!("Sortie du plein écran...");
             ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
             ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(true));
             ctx.send_viewport_cmd(egui::ViewportCommand::Resizable(true));
             
-            // Marquer le redimensionnement en attente - on va le faire après quelques frames
-            // pour laisser le temps au window manager de traiter la sortie du plein écran
+            // Marquer le redimensionnement en attente
             self.pending_resize = Some((self.width, self.height));
             self.resize_frame_count = 0;
             
-            println!("Redimensionnement programmé: {}x{} pixels", self.width, self.height);
-            
-            // Forcer un repaint
             ctx.request_repaint();
         }
         
@@ -486,35 +466,19 @@ impl RegionApp {
         
         // Traiter le screenshot
         if let Some(frame_data) = last_screenshot {
-            println!("[UI] Received screenshot: {}x{}, {} bytes", 
-                frame_data.width, frame_data.height, frame_data.data.len());
-            
             if self.selecting_region && self.screenshot_texture.is_none() {
-                println!("[UI] Converting frame to image...");
-                match self.frame_to_image(&frame_data) {
-                    Ok(image) => {
-                        println!("[UI] Image converted, size: {:?}, loading texture...", image.size);
-                        self.screenshot_texture = Some(ctx.load_texture(
-                            "screenshot",
-                            image,
-                            Default::default(),
-                        ));
-                        self.selection_ready = true;
-                        println!("[UI] Screenshot texture loaded, selection_ready=true");
-                        
-                        // MAINTENANT passer en plein écran pour afficher le screenshot
-                        // Le screenshot a été capturé, l'utilisateur a accepté le partage
-                        println!("[UI] Going fullscreen to display screenshot...");
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(false));
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(true));
-                    }
-                    Err(e) => {
-                        eprintln!("[UI] Failed to convert frame to image: {}", e);
-                    }
+                if let Ok(image) = self.frame_to_image(&frame_data) {
+                    self.screenshot_texture = Some(ctx.load_texture(
+                        "screenshot",
+                        image,
+                        Default::default(),
+                    ));
+                    self.selection_ready = true;
+                    
+                    // Passer en plein écran pour afficher le screenshot
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(false));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(true));
                 }
-            } else {
-                println!("[UI] Skipping screenshot: selecting_region={}, has_texture={}", 
-                    self.selecting_region, self.screenshot_texture.is_some());
             }
         }
     }
@@ -523,46 +487,18 @@ impl RegionApp {
         let pixel_count = (frame_data.width * frame_data.height) as usize;
         let data = &*frame_data.data;
         
-        println!("[UI] frame_to_image: {}x{} = {} pixels, data_len = {}", 
-            frame_data.width, frame_data.height, pixel_count, data.len());
-        
         // Vérifier que nous avons assez de données
         let expected_bytes = pixel_count * 4;
         if data.len() < expected_bytes {
             return Err(format!("Not enough data: got {} bytes, expected {}", data.len(), expected_bytes));
         }
         
-        // Check if data is all black
-        let non_zero = data.iter().take(4000).filter(|&&b| b != 0).count();
-        println!("[UI] Non-zero bytes in first 4000: {} ({}%)", non_zero, non_zero * 100 / 4000);
-        
-        // Log first few pixels in detail
-        if data.len() >= 16 {
-            println!("[UI] First 4 pixels (BGRA): [{},{},{},{}] [{},{},{},{}] [{},{},{},{}] [{},{},{},{}]",
-                data[0], data[1], data[2], data[3],
-                data[4], data[5], data[6], data[7],
-                data[8], data[9], data[10], data[11],
-                data[12], data[13], data[14], data[15]);
-        }
-        
-        // Check middle of image
-        let mid_offset = (frame_data.height / 2) as usize * (frame_data.width as usize * 4) + 
-                         (frame_data.width / 2) as usize * 4;
-        if data.len() > mid_offset + 16 {
-            println!("[UI] Middle pixels (BGRA): [{},{},{},{}] [{},{},{},{}]",
-                data[mid_offset], data[mid_offset+1], data[mid_offset+2], data[mid_offset+3],
-                data[mid_offset+4], data[mid_offset+5], data[mid_offset+6], data[mid_offset+7]);
-        }
-        
         // Check if we need to convert BGRA -> RGBA or if already in RGBA
         let is_rgba = matches!(frame_data.format, PixelFormat::RGBA8888);
-        println!("[UI] Format: {:?}, needs conversion: {}", frame_data.format, !is_rgba);
         
         // Optimisation: conversion parallèle BGRA -> RGBA avec rayon (si nécessaire)
-        // Pour les grandes images (> 720p), utiliser le traitement parallèle
         let pixels: Vec<egui::Color32> = if is_rgba {
             // Already in RGBA format, just copy
-            println!("[UI] Already RGBA, no conversion needed");
             if pixel_count > 500_000 {
                 data.par_chunks_exact(4)
                     .take(pixel_count)
@@ -584,20 +520,16 @@ impl RegionApp {
             }
         } else {
             // Need to convert BGRA -> RGBA
-            println!("[UI] Converting BGRA -> RGBA...");
             if pixel_count > 500_000 {
-                // Version parallèle - diviser le travail sur tous les cores CPU
                 data.par_chunks_exact(4)
                     .take(pixel_count)
                     .map(|bgra| {
-                        // BGRA -> RGBA : swap B et R, alpha forcé à 255
                         egui::Color32::from_rgba_unmultiplied(
                             bgra[2], bgra[1], bgra[0], 255,
                         )
                     })
                     .collect()
             } else {
-                // Version séquentielle pour petites images (overhead parallélisation > gain)
                 data.chunks_exact(4)
                     .take(pixel_count)
                     .map(|bgra| {
@@ -608,8 +540,6 @@ impl RegionApp {
                     .collect()
             }
         };
-        
-        println!("[UI] Conversion done, {} pixels", pixels.len());
         
         Ok(egui::ColorImage {
             size: [frame_data.width as usize, frame_data.height as usize],
@@ -634,10 +564,6 @@ impl eframe::App for RegionApp {
                 let window_width = target_width as f32;
                 let window_height = target_height as f32;
                 
-                println!("\n=== REDIMENSIONNEMENT DIFFERE ===");
-                println!("Frame count: {}", self.resize_frame_count);
-                println!("Taille cible: {}x{}", window_width, window_height);
-                
                 // Sur Wayland, envoyer plusieurs fois la commande de taille
                 ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(
                     egui::vec2(window_width, window_height)
@@ -650,13 +576,26 @@ impl eframe::App for RegionApp {
                     self.start_capture();
                 }
                 
-                // Envoyer en arrière-plan maintenant que la fenêtre est visible
+                // Programmer la minimisation APRES un délai pour que le resize soit appliqué
                 if self.pending_send_to_background {
-                    self.pending_send_to_background = false;
-                    self.send_to_background(ctx);
+                    self.background_delay_frames = 1;
                 }
             }
             
+            ctx.request_repaint();
+        }
+        
+        // Traiter la minimisation différée (après le resize)
+        if self.pending_send_to_background && self.pending_resize.is_none() {
+            self.background_delay_frames += 1;
+            // Attendre 20 frames sur Wayland, 10 sur X11
+            let frames_to_wait = if is_wayland() { 20 } else { 10 };
+            
+            if self.background_delay_frames >= frames_to_wait {
+                self.pending_send_to_background = false;
+                self.background_delay_frames = 0;
+                self.send_to_background(ctx);
+            }
             ctx.request_repaint();
         }
         
@@ -679,24 +618,11 @@ impl eframe::App for RegionApp {
                         let img_size = screenshot.size_vec2();
                         let screen_rect = ui.max_rect();
                         
-                        // Log une seule fois
-                        static mut SELECTION_LOGGED: bool = false;
-                        unsafe {
-                            if !SELECTION_LOGGED {
-                                println!("\n=== MODE SELECTION ===");
-                                println!("UI rect (points logiques): {:?}", screen_rect);
-                                println!("Screenshot size (pixels): {:?}", img_size);
-                                SELECTION_LOGGED = true;
-                            }
-                        }
-                        
                         // IMPORTANT: On affiche l'image en l'étirant pour remplir TOUT le screen_rect
-                        // Donc le screenshot_display_rect EST le screen_rect
-                        // Le ratio de conversion est: screenshot_pixels / screen_rect_points
                         self.screenshot_display_rect = Some(screen_rect);
+                        let _ = img_size; // Used for scaling calculations
                         
-                        // Afficher l'image étiée pour remplir tout l'écran
-                        // (comme le fait la version Python)
+                        // Afficher l'image étirée pour remplir tout l'écran
                         ui.put(
                             screen_rect,
                             egui::Image::new((screenshot.id(), screen_rect.size()))
@@ -783,21 +709,6 @@ impl eframe::App for RegionApp {
         
         // Mode streaming pur - afficher uniquement l'image sans UI
         if self.streaming_only && self.capturing {
-            // Log de la taille réelle de la fenêtre (seulement la première frame)
-            static mut LOGGED: bool = false;
-            unsafe {
-                if !LOGGED {
-                    let window_size = ctx.screen_rect().size();
-                    let pixels_per_point = ctx.pixels_per_point();
-                    println!("\n=== FENETRE STREAMING ===");
-                    println!("Taille fenêtre (screen_rect): {}x{} (points logiques)", window_size.x, window_size.y);
-                    println!("Taille fenêtre en pixels: {}x{}", window_size.x * pixels_per_point, window_size.y * pixels_per_point);
-                    println!("Région capturée: {}x{} at ({}, {})", self.width, self.height, self.x, self.y);
-                    println!("Pixels per point: {}", pixels_per_point);
-                    LOGGED = true;
-                }
-            }
-            
             egui::CentralPanel::default()
                 .frame(egui::Frame::none().inner_margin(egui::Margin::ZERO))
                 .show(ctx, |ui| {
@@ -808,20 +719,7 @@ impl eframe::App for RegionApp {
                         // Utiliser TOUT le rect disponible sans aucun padding
                         let ui_rect = ui.max_rect();
                         
-                        // Log détaillé une seule fois
-                        static mut DETAIL_LOGGED: bool = false;
-                        unsafe {
-                            if !DETAIL_LOGGED {
-                                let img_size = egui::vec2(texture.size()[0] as f32, texture.size()[1] as f32);
-                                println!("Taille texture: {}x{}", img_size.x, img_size.y);
-                                println!("UI max_rect: {:?}", ui_rect);
-                                println!("========================\n");
-                                DETAIL_LOGGED = true;
-                            }
-                        }
-                        
-                        // Utiliser ui.put() pour placer l'image exactement dans le rect,
-                        // en étirant l'image pour remplir tout l'espace disponible (1:1 pixel)
+                        // Utiliser ui.put() pour placer l'image exactement dans le rect
                         ui.put(
                             ui_rect,
                             egui::Image::new((texture.id(), ui_rect.size()))
@@ -954,7 +852,7 @@ impl eframe::App for RegionApp {
                         if ui.button("Fermer").clicked() {
                             self.show_streaming_options = false;
                             if let Err(e) = self.config.save() {
-                                eprintln!("Erreur sauvegarde: {}", e);
+                                error!("[Config] Save error: {}", e);
                             }
                         }
                     });
@@ -1048,7 +946,7 @@ impl eframe::App for RegionApp {
                 ui.add_space(10.0);
                 if ui.button("💾 Sauvegarder").clicked() {
                     if let Err(e) = self.config.save() {
-                        eprintln!("Erreur: {}", e);
+                        error!("[Config] Save error: {}", e);
                     }
                 }
             });
@@ -1082,17 +980,14 @@ async fn capture_task_continuous(
     
     // Réutiliser le backend existant ou en créer un nouveau
     let mut backend: Box<dyn CaptureBackend> = if let Some(backend) = existing_backend {
-        println!("Réutilisation du backend Portal existant (pas de nouveau dialogue)");
         backend
     } else if is_wayland() {
-        println!("Using Portal backend (Wayland) - nouveau dialogue");
         Box::new(PortalBackend::new())
     } else {
-        println!("Using X11 backend");
         Box::new(AutoBackend::new()?)
     };
     
-    // Mettre à jour la région sur le backend (réinitialise pour la nouvelle région)
+    // Mettre à jour la région sur le backend
     backend.init(region).await?;
     
     let mut profiler = FrameProfiler::new(30);
@@ -1107,15 +1002,11 @@ async fn capture_task_continuous(
     let mut total_bytes_sent: u64 = 0;
     let stats_start = std::time::Instant::now();
     
-    // Pré-calculer la taille estimée du buffer pour éviter les réallocations
+    // Pré-calculer la taille estimée du buffer
     let estimated_buffer_size = (region.width * region.height * 4) as usize;
+    let _ = estimated_buffer_size; // Used for buffer pre-allocation
     
-    println!("Starting continuous stream: {}x{} at ({}, {}) - Target: {} FPS ({:.2}ms/frame) - Buffer: {}MB", 
-        region.width, region.height, region.x, region.y, target_fps, 
-        frame_duration.as_secs_f64() * 1000.0,
-        estimated_buffer_size / 1_000_000);
-    
-    // Variable pour tracker la dernière frame envoyée (éviter doublons)
+    // Variable pour tracker la dernière frame envoyée
     let mut last_sequence = 0u64;
     
     loop {
@@ -1123,7 +1014,6 @@ async fn capture_task_continuous(
         
         // Check stop signal (non-bloquant)
         if stop_rx.try_recv().is_ok() {
-            println!("Stopping stream...");
             let _ = tx.send(StatsUpdate::Stopped);
             break;
         }
@@ -1135,7 +1025,7 @@ async fn capture_task_continuous(
         let frame = match backend.capture_frame().await {
             Ok(f) => f,
             Err(e) => {
-                eprintln!("Capture error: {}", e);
+                error!("[Capture] Frame error: {}", e);
                 tokio::time::sleep(frame_duration).await;
                 continue;
             }
@@ -1149,6 +1039,7 @@ async fn capture_task_continuous(
         // Skip si c'est la même frame (basé sur sequence number)
         if frame.sequence == last_sequence {
             frames_skipped += 1;
+            trace!("[Capture] Frame skipped (same sequence), total skipped: {}", frames_skipped);
             tokio::time::sleep(frame_duration / 2).await;
             continue;
         }
@@ -1183,15 +1074,6 @@ async fn capture_task_continuous(
                 memory_mb,
                 data_rate_mbps,
             });
-            
-            // Log périodique (moins fréquent)
-            if frame_count % 200 == 0 {
-                let skip_rate = if frame_count > 0 { 
-                    (frames_skipped as f64 / frame_count as f64) * 100.0 
-                } else { 0.0 };
-                println!("[Stats] FPS: {:.1} | CPU: {:.1}% | RAM: {:.1}MB | Débit: {:.2}MB/s | Skip: {:.1}% | Frames: {}", 
-                    stats.avg_fps, cpu_percent, memory_mb, data_rate_mbps, skip_rate, frame_count);
-            }
         }
         
         // Envoyer la frame via Arc (zero-copy)
@@ -1208,20 +1090,16 @@ async fn capture_task_continuous(
         // Frame pacing intelligent
         let elapsed = frame_start.elapsed();
         if elapsed < frame_duration {
-            // Utiliser sleep précis pour le frame pacing
             let sleep_time = frame_duration - elapsed;
             if sleep_time > std::time::Duration::from_micros(500) {
                 tokio::time::sleep(sleep_time).await;
             } else {
-                // Spin wait pour précision < 500µs
                 while frame_start.elapsed() < frame_duration {
                     std::hint::spin_loop();
                 }
             }
         }
     }
-    
-    println!("Stream stopped: {} frames total, {} skipped", frame_count, frames_skipped);
     
     Ok(())
 }

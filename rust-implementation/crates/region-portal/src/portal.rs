@@ -9,6 +9,7 @@
 use ashpd::desktop::screencast::{CursorMode, SourceType, Screencast};
 use ashpd::desktop::PersistMode;
 use ashpd::WindowIdentifier;
+use log::{debug, info, warn};
 use thiserror::Error;
 use std::os::fd::{OwnedFd, AsRawFd};
 
@@ -75,6 +76,8 @@ impl PortalCapture {
         restore_token: Option<RestoreToken>,
         include_cursor: bool,
     ) -> Result<Vec<StreamInfo>, PortalError> {
+        debug!("[Portal] Creating screencast session (cursor={})", include_cursor);
+        
         let screencast = Screencast::new().await?;
         
         let cursor_mode = if include_cursor {
@@ -85,6 +88,10 @@ impl PortalCapture {
 
         let session = screencast.create_session().await?;
         let persist_mode = PersistMode::Application;
+        
+        if restore_token.is_some() {
+            debug!("[Portal] Using restore token for session");
+        }
         
         screencast
             .select_sources(
@@ -97,6 +104,7 @@ impl PortalCapture {
             )
             .await?;
 
+        debug!("[Portal] Starting session, waiting for user selection...");
         let response = screencast
             .start(&session, &WindowIdentifier::default())
             .await?
@@ -104,7 +112,7 @@ impl PortalCapture {
 
         // Get PipeWire file descriptor - CRITICAL for connecting to the stream
         let pipewire_fd = screencast.open_pipe_wire_remote(&session).await?;
-        println!("Portal: Got PipeWire fd: {}", pipewire_fd.as_raw_fd());
+        debug!("[Portal] Got PipeWire fd: {}", pipewire_fd.as_raw_fd());
         self.pipewire_fd = Some(pipewire_fd);
 
         let streams: Vec<StreamInfo> = response
@@ -124,10 +132,17 @@ impl PortalCapture {
             .collect();
 
         if streams.is_empty() {
+            warn!("[Portal] No streams available from portal");
             return Err(PortalError::NoStreams);
         }
 
+        for stream in &streams {
+            info!("[Portal] Stream: node={}, size={}x{}, type={}", 
+                stream.node_id, stream.width, stream.height, stream.source_type);
+        }
+
         if let Some(token) = response.restore_token() {
+            debug!("[Portal] Got restore token for future sessions");
             self.restore_token = Some(RestoreToken(token.to_string()));
         }
 

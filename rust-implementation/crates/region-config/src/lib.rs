@@ -1,3 +1,4 @@
+use log::{debug, warn};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
@@ -80,16 +81,16 @@ impl Config {
                 Ok(content) => {
                     match serde_json::from_str::<Settings>(&content) {
                         Ok(settings) => {
-                            eprintln!("✅ Settings loaded from {:?}", config_file);
+                            debug!("[Config] Settings loaded from {:?}", config_file);
                             return settings;
                         }
                         Err(e) => {
-                            eprintln!("⚠️ Error parsing config: {}", e);
+                            warn!("[Config] Error parsing config: {}", e);
                         }
                     }
                 }
                 Err(e) => {
-                    eprintln!("⚠️ Error reading config: {}", e);
+                    warn!("[Config] Error reading config: {}", e);
                 }
             }
         }
@@ -101,7 +102,7 @@ impl Config {
         fs::create_dir_all(&self.config_dir)?;
         let content = serde_json::to_string_pretty(&self.settings)?;
         fs::write(&self.config_file, content)?;
-        eprintln!("💾 Settings saved to {:?}", self.config_file);
+
         Ok(())
     }
     

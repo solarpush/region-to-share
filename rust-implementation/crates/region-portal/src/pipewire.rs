@@ -10,6 +10,7 @@ use crossbeam_channel::{self as channel, Receiver, Sender};  // Thread-safe and 
 use tokio::sync::mpsc as tokio_mpsc;  // Keep for stop signal
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
+use log::{debug, trace, error, info};
 
 /// PipeWire stream state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,7 +60,7 @@ impl PipeWireStream {
         // Spawn PipeWire thread (PipeWire requires its own thread)
         thread::spawn(move || {
             if let Err(e) = run_pipewire_loop_with_fd(node_id, pipewire_fd, frame_tx, &mut stop_rx, state_clone) {
-                eprintln!("PipeWire error: {}", e);
+                error!("[PipeWire] Thread error: {}", e);
             }
         });
         
@@ -69,7 +70,6 @@ impl PipeWireStream {
         loop {
             let current_state = state.load(Ordering::Relaxed);
             if current_state == 3 {
-                println!("PipeWire: Stream is now in Streaming state");
                 break;
             }
             if current_state == 4 {
@@ -236,12 +236,12 @@ fn run_pipewire_loop_with_fd(
     
     // Connect using the portal's fd if provided, otherwise connect normally
     let core = if pipewire_fd >= 0 {
-        println!("PipeWire: Connecting with portal fd {}", pipewire_fd);
+        debug!("PipeWire: Connecting with portal fd {}", pipewire_fd);
         // SAFETY: The fd comes from ashpd portal and is valid
         let owned_fd = unsafe { std::os::fd::OwnedFd::from_raw_fd(pipewire_fd) };
         context.connect_fd(owned_fd, None)?
     } else {
-        println!("PipeWire: Connecting without portal fd (local)");
+        debug!("PipeWire: Connecting without portal fd (local)");
         context.connect(None)?
     };
     
@@ -263,237 +263,192 @@ fn run_pipewire_loop_with_fd(
     let _listener = stream
         .add_local_listener_with_user_data(())
         .state_changed(move |stream, _, old, new| {
-            println!("PipeWire stream state: {:?} -> {:?}", old, new);
-            println!("  Stream node_id: {}, name: {}", stream.node_id(), stream.name());
+            debug!("PipeWire stream state: {:?} -> {:?}", old, new);
             let new_state = match new {
                 pw::stream::StreamState::Paused => {
-                    println!("  Stream is PAUSED - waiting for activation");
+                    debug!("PipeWire: Stream PAUSED");
                     2
                 },
                 pw::stream::StreamState::Streaming => {
-                    println!("  Stream is STREAMING - should receive frames now");
+                    info!("PipeWire: Stream STREAMING");
                     3
                 },
                 pw::stream::StreamState::Error(e) => {
-                    println!("  Stream ERROR: {}", e);
+                    error!("PipeWire stream error: {}", e);
                     4
                 },
                 _ => 1,
             };
             state_clone.store(new_state, Ordering::Relaxed);
+            let _ = stream; // Silence unused warning
         })
-        .param_changed(move |stream, _, id, pod| {
-            // Capture format changes to get actual stream dimensions
-            println!("PipeWire param_changed: id={}, has_pod={}", id, pod.is_some());
-            if id == pw::spa::param::ParamType::Format.as_raw() {
-                println!("  -> Format param received");
-                if let Some(pod) = pod {
-                    let pod_size = pod.size();
-                    println!("  -> Pod size: {}, pod type: {:?}", pod_size, pod.type_());
-                    // Log stream state at this point
-                    println!("  -> Stream state: {:?}", stream.state());
-                }
-            } else if id == pw::spa::param::ParamType::Meta.as_raw() {
-                println!("  -> Meta param received");
-            }
+        .param_changed(move |_stream, _, id, pod| {
+            trace!("PipeWire param_changed: id={}, has_pod={}", id, pod.is_some());
         })
         // Clone importer for process callback
         .process({
             let dmabuf_importer_clone = dmabuf_importer.clone();
             move |stream, _| {
-            println!("PipeWire: >>> process callback called! <<<");
-            println!("  Stream state in process: {:?}", stream.state());
+            trace!("PipeWire process callback, state: {:?}", stream.state());
             
-            match stream.dequeue_buffer() {
-                Some(mut buffer) => {
-                    println!("  Got buffer from dequeue!");
-                    let datas = buffer.datas_mut();
-                    println!("  Buffer has {} data chunks", datas.len());
+            if let Some(mut buffer) = stream.dequeue_buffer() {
+                let datas = buffer.datas_mut();
+                
+                if !datas.is_empty() {
+                    let data_ref = &mut datas[0];
+                    let data_type = data_ref.type_();
                     
-                    if !datas.is_empty() {
-                        let data_ref = &mut datas[0];
-                        
-                        // Log data type and flags
-                        let data_type = data_ref.type_();
-                        let data_flags = data_ref.flags();
-                        println!("  Data type: {:?}, flags: {:?}", data_type, data_flags);
-                        
-                        // Get raw spa_data to access fd - copy values to avoid borrow issues
-                        let raw_data = data_ref.as_raw();
-                        let fd = raw_data.fd;
-                        let mapoffset = raw_data.mapoffset;
-                        let maxsize = raw_data.maxsize;
-                        println!("  Raw fd: {}, mapoffset: {}, maxsize: {}", 
-                            fd, mapoffset, maxsize);
-                        
-                        // Get chunk info for actual data size
-                        let chunk = data_ref.chunk();
-                        let data_size = chunk.size() as usize;
-                        let stride = chunk.stride() as usize;
-                        let offset = chunk.offset() as usize;
-                        
-                        println!("  Chunk: size={}, stride={}, offset={}", data_size, stride, offset);
-                        
-                        // Try to get data - method depends on buffer type
-                        // Returns (data, is_dmabuf) - DmaBuf gives RGBA, mmap gives BGRA
-                        let frame_data: Option<(Vec<u8>, bool)> = match data_ref.data() {
-                            Some(data) => {
-                                println!("  Data available directly: {} bytes", data.len());
-                                let actual_size = data_size.min(data.len());
-                                if actual_size > 0 {
-                                    Some((data[offset..offset + actual_size].to_vec(), false)) // Direct data is BGRA
-                                } else {
-                                    None
-                                }
-                            }
-                            None => {
-                                println!("  No direct data, checking data type...");
-                                
-                                // Check if this is a DmaBuf
-                                if data_type == DataType::DmaBuf {
-                                    println!("  DmaBuf detected, using EGL import...");
-                                    
-                                    // Calculate dimensions from stride
-                                    let bpp = 4; // BGRA/ARGB
-                                    let width = if stride > 0 { (stride / bpp) as u32 } else { 0 };
-                                    let height = if stride > 0 && data_size > 0 { 
-                                        (data_size / stride) as u32 
-                                    } else { 
-                                        0 
-                                    };
-                                    
-                                    println!("  Calculated dimensions for DmaBuf: {}x{}", width, height);
-                                    
-                                    if fd >= 0 && width > 0 && height > 0 {
-                                        // Get or create the DmaBuf importer
-                                        let mut importer_guard = dmabuf_importer_clone.borrow_mut();
-                                        
-                                        // Initialize importer if not yet done
-                                        if importer_guard.is_none() {
-                                            println!("  Initializing DmaBufImporter...");
-                                            match DmaBufImporter::new() {
-                                                Ok(imp) => {
-                                                    println!("  DmaBufImporter created successfully!");
-                                                    *importer_guard = Some(imp);
-                                                }
-                                                Err(e) => {
-                                                    eprintln!("  Failed to create DmaBufImporter: {}", e);
-                                                }
-                                            }
-                                        }
-                                        
-                                        if let Some(ref importer) = *importer_guard {
-                                            // Use ARGB8888 format (common for screen capture)
-                                            // DRM_FORMAT_ARGB8888 = 0x34325241
-                                            let fourcc = 0x34325241u32;
-                                            
-                                            println!("  Importing DmaBuf: fd={}, {}x{}, stride={}, offset={}", 
-                                                fd, width, height, stride, offset);
-                                            
-                                            match importer.import_dmabuf(
-                                                fd as i32,
-                                                width,
-                                                height,
-                                                stride as u32,
-                                                offset as u32,
-                                                fourcc,
-                                            ) {
-                                                Ok(pixels) => {
-                                                    println!("  DmaBuf import successful! Got {} bytes", pixels.len());
-                                                    Some((pixels, true)) // DmaBuf import gives RGBA (gl::ReadPixels uses RGBA)
-                                                }
-                                                Err(e) => {
-                                                    eprintln!("  DmaBuf import failed: {}", e);
-                                                    None
-                                                }
-                                            }
-                                        } else {
-                                            eprintln!("  No DmaBufImporter available");
-                                            None
-                                        }
-                                    } else {
-                                        println!("  Invalid DmaBuf params: fd={}, {}x{}", fd, width, height);
-                                        None
-                                    }
-                                } else if fd >= 0 && maxsize > 0 {
-                                    // MemFd or other - try mmap
-                                    println!("  Trying mmap for MemFd...");
-                                    let map_size = maxsize as usize;
-                                    let map_offset = mapoffset as i64;
-                                    
-                                    match unsafe {
-                                        libc::mmap(
-                                            std::ptr::null_mut(),
-                                            map_size,
-                                            libc::PROT_READ,
-                                            libc::MAP_SHARED,
-                                            fd as i32,
-                                            map_offset,
-                                        )
-                                    } {
-                                        ptr if ptr != libc::MAP_FAILED => {
-                                            println!("  mmap successful!");
-                                            let slice = unsafe { 
-                                                std::slice::from_raw_parts(
-                                                    (ptr as *const u8).add(offset), 
-                                                    data_size.min(map_size - offset)
-                                                ) 
-                                            };
-                                            let result = slice.to_vec();
-                                            unsafe { libc::munmap(ptr, map_size); }
-                                            Some((result, false)) // mmap gives BGRA
-                                        }
-                                        _ => {
-                                            let err = std::io::Error::last_os_error();
-                                            println!("  mmap failed: {}", err);
-                                            None
-                                        }
-                                    }
-                                } else {
-                                    println!("  Invalid fd or maxsize");
-                                    None
-                                }
-                            }
-                        };
-                        
-                        if let Some((data, is_dmabuf)) = frame_data {
-                            if stride > 0 && !data.is_empty() {
-                                let bpp = 4;
-                                let width = (stride / bpp) as u32;
-                                let height = (data.len() / stride) as u32;
-                                
-                                // DmaBuf import gives RGBA (from gl::ReadPixels), mmap gives BGRA
-                                let format = if is_dmabuf {
-                                    PixelFormat::RGBA8888
-                                } else {
-                                    PixelFormat::BGRA8888
-                                };
-                                
-                                println!("  Calculated dimensions: {}x{}, format: {:?}", width, height, format);
-                                
-                                if width > 0 && height > 0 {
-                                    let pw_frame = PipeWireFrame {
-                                        width,
-                                        height,
-                                        data: Arc::new(data),
-                                        format,
-                                        timestamp: Instant::now(),
-                                    };
-                                    println!("  Sending frame {}x{} through channel", width, height);
-                                    if let Err(e) = frame_tx_clone.send(pw_frame) {
-                                        eprintln!("  Failed to send frame: {}", e);
-                                    } else {
-                                        println!("  Frame sent successfully!");
-                                    }
-                                }
+                    // Get raw spa_data to access fd - copy values to avoid borrow issues
+                    let raw_data = data_ref.as_raw();
+                    let fd = raw_data.fd;
+                    let mapoffset = raw_data.mapoffset;
+                    let maxsize = raw_data.maxsize;
+                    
+                    trace!("PipeWire buffer: fd={}, maxsize={}, type={:?}", fd, maxsize, data_type);
+                    
+                    // Get chunk info for actual data size
+                    let chunk = data_ref.chunk();
+                    let data_size = chunk.size() as usize;
+                    let stride = chunk.stride() as usize;
+                    let offset = chunk.offset() as usize;
+                    
+                    trace!("PipeWire chunk: size={}, stride={}, offset={}", data_size, stride, offset);
+                    
+                    // Try to get data - method depends on buffer type
+                    // Returns (data, is_dmabuf) - DmaBuf gives RGBA, mmap gives BGRA
+                    let frame_data: Option<(Vec<u8>, bool)> = match data_ref.data() {
+                        Some(data) => {
+                            let actual_size = data_size.min(data.len());
+                            if actual_size > 0 {
+                                trace!("PipeWire: Direct data {} bytes", actual_size);
+                                Some((data[offset..offset + actual_size].to_vec(), false))
+                            } else {
+                                None
                             }
                         }
-                    } else {
-                        println!("  Buffer has no data chunks!");
+                        None => {
+                            // Check if this is a DmaBuf
+                            if data_type == DataType::DmaBuf {
+                                trace!("PipeWire: DmaBuf detected, using EGL import");
+                                // Calculate dimensions from stride
+                                let bpp = 4; // BGRA/ARGB
+                                let width = if stride > 0 { (stride / bpp) as u32 } else { 0 };
+                                let height = if stride > 0 && data_size > 0 { 
+                                    (data_size / stride) as u32 
+                                } else { 
+                                    0 
+                                };
+                                
+                                trace!("PipeWire: DmaBuf dimensions {}x{}", width, height);
+                                
+                                if fd >= 0 && width > 0 && height > 0 {
+                                    // Get or create the DmaBuf importer
+                                    let mut importer_guard = dmabuf_importer_clone.borrow_mut();
+                                    
+                                    // Initialize importer if not yet done
+                                    if importer_guard.is_none() {
+                                        debug!("PipeWire: Creating DmaBufImporter");
+                                        match DmaBufImporter::new() {
+                                            Ok(imp) => {
+                                                debug!("PipeWire: DmaBufImporter created successfully");
+                                                *importer_guard = Some(imp);
+                                            }
+                                            Err(e) => {
+                                                error!("Failed to create DmaBufImporter: {}", e);
+                                            }
+                                        }
+                                    }
+                                    
+                                    if let Some(ref importer) = *importer_guard {
+                                        // DRM_FORMAT_ARGB8888 = 0x34325241
+                                        let fourcc = 0x34325241u32;
+                                        
+                                        trace!("PipeWire: Importing DmaBuf fd={} {}x{}", fd, width, height);
+                                        match importer.import_dmabuf(
+                                            fd as i32,
+                                            width,
+                                            height,
+                                            stride as u32,
+                                            offset as u32,
+                                            fourcc,
+                                        ) {
+                                            Ok(pixels) => {
+                                                trace!("PipeWire: DmaBuf import success, {} bytes", pixels.len());
+                                                Some((pixels, true)) // DmaBuf gives RGBA
+                                            }
+                                            Err(e) => {
+                                                error!("DmaBuf import failed: {}", e);
+                                                None
+                                            }
+                                        }
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
+                                }
+                            } else if fd >= 0 && maxsize > 0 {
+                                // MemFd or other - try mmap
+                                trace!("PipeWire: Trying mmap for fd={}", fd);
+                                let map_size = maxsize as usize;
+                                let map_offset = mapoffset as i64;
+                                
+                                match unsafe {
+                                    libc::mmap(
+                                        std::ptr::null_mut(),
+                                        map_size,
+                                        libc::PROT_READ,
+                                        libc::MAP_SHARED,
+                                        fd as i32,
+                                        map_offset,
+                                    )
+                                } {
+                                    ptr if ptr != libc::MAP_FAILED => {
+                                        let slice = unsafe { 
+                                            std::slice::from_raw_parts(
+                                                (ptr as *const u8).add(offset), 
+                                                data_size.min(map_size - offset)
+                                            ) 
+                                        };
+                                        let result = slice.to_vec();
+                                        unsafe { libc::munmap(ptr, map_size); }
+                                        Some((result, false)) // mmap gives BGRA
+                                    }
+                                    _ => {
+                                        None
+                                    }
+                                }
+                            } else {
+                                None
+                            }
+                        }
+                    };
+                    
+                    if let Some((data, is_dmabuf)) = frame_data {
+                        if stride > 0 && !data.is_empty() {
+                            let bpp = 4;
+                            let width = (stride / bpp) as u32;
+                            let height = (data.len() / stride) as u32;
+                            
+                            // DmaBuf gives RGBA, mmap gives BGRA
+                            let format = if is_dmabuf {
+                                PixelFormat::RGBA8888
+                            } else {
+                                PixelFormat::BGRA8888
+                            };
+                            
+                            if width > 0 && height > 0 {
+                                let pw_frame = PipeWireFrame {
+                                    width,
+                                    height,
+                                    data: Arc::new(data),
+                                    format,
+                                    timestamp: Instant::now(),
+                                };
+                                let _ = frame_tx_clone.send(pw_frame);
+                            }
+                        }
                     }
-                }
-                None => {
-                    println!("  dequeue_buffer() returned None - no buffer available");
                 }
             }
         }})
@@ -513,26 +468,9 @@ fn run_pipewire_loop_with_fd(
         &mut [],  // Empty params = accept any format from portal
     )?;
     
-    println!("PipeWire: Connected to node {}, starting main loop...", node_id);
-    println!("PipeWire: Stream state before mainloop: {:?}", stream.state());
-    println!("PipeWire: Stream node_id: {}", stream.node_id());
-    
     // Run main loop - this will block and process events/frames
-    println!("PipeWire: Entering main loop now...");
     mainloop.run();
-    println!("PipeWire: Main loop exited");
     
     state.store(0, Ordering::Relaxed);
     Ok(())
-}
-
-// Keep old function for backwards compatibility
-#[allow(dead_code)]
-fn run_pipewire_loop(
-    node_id: u32,
-    frame_tx: Sender<PipeWireFrame>,
-    stop_rx: &mut tokio_mpsc::UnboundedReceiver<()>,
-    state: Arc<AtomicU64>,
-) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    run_pipewire_loop_with_fd(node_id, -1, frame_tx, stop_rx, state)
 }
