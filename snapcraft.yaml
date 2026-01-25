@@ -1,32 +1,31 @@
 name: region-to-share
 base: core24
 version: '2.0.0-beta1'
-summary: Share selected screen regions - Rust edition (beta)
+summary: Share selected screen regions in video calls
 description: |
   Region-to-Share allows you to select a specific area of your screen
   and display it in a window that you can share directly 
   in your video conferencing applications (Google Meet, Teams, Discord, etc.).
 
-  🚀 Version 2.0 - Complete Rust rewrite!
+  Version 2.0 - Complete Rust rewrite with improved performance.
   
   What's new:
   - Native Rust implementation (no Python dependencies)
-  - Much lower CPU usage (~5% vs ~15% in Python version)
-  - Native Wayland support via XDG Desktop Portal + PipeWire
-  - Native X11 support via x11rb
-  - Modern egui interface (simplified)
-  - Smaller binary size (~70MB vs +300MB in Python version embeded dependencies)
+  - Lower CPU usage
+  - Native Wayland support via XDG Desktop Portal
+  - Native X11 support
+  - Modern egui interface
+  - Smaller binary size
 
   Features:
-  - Interactive screen region selection
+  - Interactive region selection
   - High-performance real-time display
   - Works on X11 and Wayland (GNOME, KDE, Sway, Hyprland, etc.)
   - Performance monitoring overlay
   - Adjustable window opacity
-  - Auto send-to-background mode
   - Remember last region for quick reuse
 
-  ⚠️ BETA: This is a beta version. Please report issues on GitHub.
+  BETA: This is a beta version. Please report issues on GitHub.
 
 grade: stable
 confinement: strict
