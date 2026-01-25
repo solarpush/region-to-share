@@ -339,12 +339,13 @@ fn run_pipewire_loop_with_fd(
                         println!("  Chunk: size={}, stride={}, offset={}", data_size, stride, offset);
                         
                         // Try to get data - method depends on buffer type
-                        let frame_data: Option<Vec<u8>> = match data_ref.data() {
+                        // Returns (data, is_dmabuf) - DmaBuf gives RGBA, mmap gives BGRA
+                        let frame_data: Option<(Vec<u8>, bool)> = match data_ref.data() {
                             Some(data) => {
                                 println!("  Data available directly: {} bytes", data.len());
                                 let actual_size = data_size.min(data.len());
                                 if actual_size > 0 {
-                                    Some(data[offset..offset + actual_size].to_vec())
+                                    Some((data[offset..offset + actual_size].to_vec(), false)) // Direct data is BGRA
                                 } else {
                                     None
                                 }
@@ -403,7 +404,7 @@ fn run_pipewire_loop_with_fd(
                                             ) {
                                                 Ok(pixels) => {
                                                     println!("  DmaBuf import successful! Got {} bytes", pixels.len());
-                                                    Some(pixels)
+                                                    Some((pixels, true)) // DmaBuf import gives RGBA (gl::ReadPixels uses RGBA)
                                                 }
                                                 Err(e) => {
                                                     eprintln!("  DmaBuf import failed: {}", e);
@@ -444,7 +445,7 @@ fn run_pipewire_loop_with_fd(
                                             };
                                             let result = slice.to_vec();
                                             unsafe { libc::munmap(ptr, map_size); }
-                                            Some(result)
+                                            Some((result, false)) // mmap gives BGRA
                                         }
                                         _ => {
                                             let err = std::io::Error::last_os_error();
@@ -459,20 +460,27 @@ fn run_pipewire_loop_with_fd(
                             }
                         };
                         
-                        if let Some(data) = frame_data {
+                        if let Some((data, is_dmabuf)) = frame_data {
                             if stride > 0 && data.len() > 0 {
-                                let bpp = 4; // BGRA
+                                let bpp = 4;
                                 let width = (stride / bpp) as u32;
                                 let height = (data.len() / stride) as u32;
                                 
-                                println!("  Calculated dimensions: {}x{}", width, height);
+                                // DmaBuf import gives RGBA (from gl::ReadPixels), mmap gives BGRA
+                                let format = if is_dmabuf {
+                                    PixelFormat::RGBA8888
+                                } else {
+                                    PixelFormat::BGRA8888
+                                };
+                                
+                                println!("  Calculated dimensions: {}x{}, format: {:?}", width, height, format);
                                 
                                 if width > 0 && height > 0 {
                                     let pw_frame = PipeWireFrame {
                                         width,
                                         height,
                                         data: Arc::new(data),
-                                        format: PixelFormat::BGRA8888,
+                                        format,
                                         timestamp: Instant::now(),
                                     };
                                     println!("  Sending frame {}x{} through channel", width, height);

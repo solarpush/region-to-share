@@ -6,6 +6,7 @@ use region_portal::PortalBackend;
 use region_config::Config;
 use std::sync::Arc;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
+use tokio::sync::Mutex as TokioMutex;
 use std::sync::Mutex as StdMutex;
 use std::fs;
 use rayon::prelude::*;
@@ -62,6 +63,8 @@ struct RegionApp {
     resize_frame_count: u32,  // Compteur pour attendre quelques frames avant resize
     show_streaming_options: bool,  // Afficher la modal d'options pendant le streaming
     pending_send_to_background: bool,  // Envoi en arrière-plan après resize
+    // Backend Portal réutilisable (garde la session ouverte)
+    portal_backend: Arc<TokioMutex<Option<Box<dyn CaptureBackend>>>>,
     // Stats système
     cpu_usage: f64,
     memory_mb: f64,
@@ -73,7 +76,7 @@ struct FrameData {
     width: u32,
     height: u32,
     data: Arc<Vec<u8>>,  // Arc pour éviter les copies
-    _format: PixelFormat,
+    format: PixelFormat,
 }
 
 enum StatsUpdate {
@@ -140,6 +143,7 @@ impl RegionApp {
             resize_frame_count: 0,
             show_streaming_options: false,
             pending_send_to_background: auto_start && auto_send_bg,
+            portal_backend: Arc::new(TokioMutex::new(None)),
             cpu_usage: 0.0,
             memory_mb: 0.0,
             data_rate_mbps: 0.0,
@@ -226,8 +230,13 @@ impl RegionApp {
         *self.stop_tx.lock().unwrap() = Some(stop_tx);
         
         let runtime = self.runtime.clone();
+        let portal_backend_arc = self.portal_backend.clone();
+        
         runtime.spawn(async move {
-            if let Err(e) = capture_task_continuous(region, frame_rate, new_tx, stop_rx).await {
+            // Récupérer le backend Portal existant s'il y en a un
+            let existing_backend = portal_backend_arc.lock().await.take();
+            
+            if let Err(e) = capture_task_continuous(region, frame_rate, new_tx, stop_rx, existing_backend).await {
                 eprintln!("Capture error: {}", e);
             }
         });
@@ -247,9 +256,9 @@ impl RegionApp {
         self.screenshot_texture = None;
         self.selection_ready = false;
         
-        // Passer en plein écran sans bordures (comme l'app Python)
-        ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(false));
-        ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(true));
+        // NE PAS passer en plein écran maintenant
+        // On le fera APRÈS avoir reçu le screenshot (quand l'utilisateur a accepté le partage)
+        // La fenêtre reste normale pour l'instant
         
         // Créer un nouveau channel pour la capture du screenshot
         let (new_tx, new_rx) = mpsc::unbounded_channel();
@@ -258,6 +267,7 @@ impl RegionApp {
         let runtime = self.runtime.clone();
         let ctx_clone = ctx.clone();
         let use_wayland = is_wayland();
+        let portal_backend_arc = self.portal_backend.clone();
         
         runtime.spawn(async move {
             println!("Démarrage capture screenshot plein écran...");
@@ -278,6 +288,8 @@ impl RegionApp {
             };
             
             // Initialize the backend with a full-screen region first (needed for Portal)
+            // Ceci affiche le dialogue Portal si on est sur Wayland
+            // L'utilisateur doit accepter le partage ici
             let init_region = Rectangle::new(0, 0, 1920, 1080);
             if let Err(e) = backend.init(init_region).await {
                 eprintln!("Failed to initialize backend: {}", e);
@@ -302,24 +314,31 @@ impl RegionApp {
                 Ok(frame) => {
                     println!("Screenshot capturé: {}x{}", frame.width, frame.height);
                     if let Some(arc_buffer) = frame.data.as_arc_buffer() {
-                    let frame_data = FrameData {
-                        width: frame.width,
-                        height: frame.height,
-                        data: arc_buffer,
-                        _format: frame.format,
-                    };
-                    println!("Envoi du screenshot via channel...");
-                    let _ = new_tx.send(StatsUpdate::Screenshot(frame_data));
-                    ctx_clone.request_repaint();
-                    println!("Screenshot envoyé et repaint demandé");
-                } else {
-                    eprintln!("Pas de buffer dans la frame");
+                        let frame_data = FrameData {
+                            width: frame.width,
+                            height: frame.height,
+                            data: arc_buffer,
+                            format: frame.format,
+                        };
+                        println!("Envoi du screenshot via channel...");
+                        let _ = new_tx.send(StatsUpdate::Screenshot(frame_data));
+                        
+                        // Stocker le backend pour réutilisation (évite un nouveau dialogue Portal)
+                        if use_wayland {
+                            println!("Sauvegarde du backend Portal pour réutilisation...");
+                            *portal_backend_arc.lock().await = Some(backend);
+                        }
+                        
+                        ctx_clone.request_repaint();
+                        println!("Screenshot envoyé et repaint demandé");
+                    } else {
+                        eprintln!("Pas de buffer dans la frame");
+                    }
+                },
+                Err(e) => {
+                    eprintln!("Échec de la capture de screenshot: {}", e);
                 }
-            },
-            Err(e) => {
-                eprintln!("Échec de la capture de screenshot: {}", e);
             }
-        }
         });
     }
     
@@ -467,15 +486,35 @@ impl RegionApp {
         
         // Traiter le screenshot
         if let Some(frame_data) = last_screenshot {
+            println!("[UI] Received screenshot: {}x{}, {} bytes", 
+                frame_data.width, frame_data.height, frame_data.data.len());
+            
             if self.selecting_region && self.screenshot_texture.is_none() {
-                if let Ok(image) = self.frame_to_image(&frame_data) {
-                    self.screenshot_texture = Some(ctx.load_texture(
-                        "screenshot",
-                        image,
-                        Default::default(),
-                    ));
-                    self.selection_ready = true;
+                println!("[UI] Converting frame to image...");
+                match self.frame_to_image(&frame_data) {
+                    Ok(image) => {
+                        println!("[UI] Image converted, size: {:?}, loading texture...", image.size);
+                        self.screenshot_texture = Some(ctx.load_texture(
+                            "screenshot",
+                            image,
+                            Default::default(),
+                        ));
+                        self.selection_ready = true;
+                        println!("[UI] Screenshot texture loaded, selection_ready=true");
+                        
+                        // MAINTENANT passer en plein écran pour afficher le screenshot
+                        // Le screenshot a été capturé, l'utilisateur a accepté le partage
+                        println!("[UI] Going fullscreen to display screenshot...");
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(false));
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(true));
+                    }
+                    Err(e) => {
+                        eprintln!("[UI] Failed to convert frame to image: {}", e);
+                    }
                 }
+            } else {
+                println!("[UI] Skipping screenshot: selecting_region={}, has_texture={}", 
+                    self.selecting_region, self.screenshot_texture.is_some());
             }
         }
     }
@@ -484,30 +523,93 @@ impl RegionApp {
         let pixel_count = (frame_data.width * frame_data.height) as usize;
         let data = &*frame_data.data;
         
-        // Optimisation: conversion parallèle BGRA -> RGBA avec rayon
+        println!("[UI] frame_to_image: {}x{} = {} pixels, data_len = {}", 
+            frame_data.width, frame_data.height, pixel_count, data.len());
+        
+        // Vérifier que nous avons assez de données
+        let expected_bytes = pixel_count * 4;
+        if data.len() < expected_bytes {
+            return Err(format!("Not enough data: got {} bytes, expected {}", data.len(), expected_bytes));
+        }
+        
+        // Check if data is all black
+        let non_zero = data.iter().take(4000).filter(|&&b| b != 0).count();
+        println!("[UI] Non-zero bytes in first 4000: {} ({}%)", non_zero, non_zero * 100 / 4000);
+        
+        // Log first few pixels in detail
+        if data.len() >= 16 {
+            println!("[UI] First 4 pixels (BGRA): [{},{},{},{}] [{},{},{},{}] [{},{},{},{}] [{},{},{},{}]",
+                data[0], data[1], data[2], data[3],
+                data[4], data[5], data[6], data[7],
+                data[8], data[9], data[10], data[11],
+                data[12], data[13], data[14], data[15]);
+        }
+        
+        // Check middle of image
+        let mid_offset = (frame_data.height / 2) as usize * (frame_data.width as usize * 4) + 
+                         (frame_data.width / 2) as usize * 4;
+        if data.len() > mid_offset + 16 {
+            println!("[UI] Middle pixels (BGRA): [{},{},{},{}] [{},{},{},{}]",
+                data[mid_offset], data[mid_offset+1], data[mid_offset+2], data[mid_offset+3],
+                data[mid_offset+4], data[mid_offset+5], data[mid_offset+6], data[mid_offset+7]);
+        }
+        
+        // Check if we need to convert BGRA -> RGBA or if already in RGBA
+        let is_rgba = matches!(frame_data.format, PixelFormat::RGBA8888);
+        println!("[UI] Format: {:?}, needs conversion: {}", frame_data.format, !is_rgba);
+        
+        // Optimisation: conversion parallèle BGRA -> RGBA avec rayon (si nécessaire)
         // Pour les grandes images (> 720p), utiliser le traitement parallèle
-        let pixels: Vec<egui::Color32> = if pixel_count > 500_000 {
-            // Version parallèle - diviser le travail sur tous les cores CPU
-            data.par_chunks_exact(4)
-                .take(pixel_count)
-                .map(|bgra| {
-                    // BGRA -> RGBA : swap B et R, alpha forcé à 255
-                    egui::Color32::from_rgba_unmultiplied(
-                        bgra[2], bgra[1], bgra[0], 255,
-                    )
-                })
-                .collect()
+        let pixels: Vec<egui::Color32> = if is_rgba {
+            // Already in RGBA format, just copy
+            println!("[UI] Already RGBA, no conversion needed");
+            if pixel_count > 500_000 {
+                data.par_chunks_exact(4)
+                    .take(pixel_count)
+                    .map(|rgba| {
+                        egui::Color32::from_rgba_unmultiplied(
+                            rgba[0], rgba[1], rgba[2], 255,
+                        )
+                    })
+                    .collect()
+            } else {
+                data.chunks_exact(4)
+                    .take(pixel_count)
+                    .map(|rgba| {
+                        egui::Color32::from_rgba_unmultiplied(
+                            rgba[0], rgba[1], rgba[2], 255,
+                        )
+                    })
+                    .collect()
+            }
         } else {
-            // Version séquentielle pour petites images (overhead parallélisation > gain)
-            data.chunks_exact(4)
-                .take(pixel_count)
-                .map(|bgra| {
-                    egui::Color32::from_rgba_unmultiplied(
-                        bgra[2], bgra[1], bgra[0], 255,
-                    )
-                })
-                .collect()
+            // Need to convert BGRA -> RGBA
+            println!("[UI] Converting BGRA -> RGBA...");
+            if pixel_count > 500_000 {
+                // Version parallèle - diviser le travail sur tous les cores CPU
+                data.par_chunks_exact(4)
+                    .take(pixel_count)
+                    .map(|bgra| {
+                        // BGRA -> RGBA : swap B et R, alpha forcé à 255
+                        egui::Color32::from_rgba_unmultiplied(
+                            bgra[2], bgra[1], bgra[0], 255,
+                        )
+                    })
+                    .collect()
+            } else {
+                // Version séquentielle pour petites images (overhead parallélisation > gain)
+                data.chunks_exact(4)
+                    .take(pixel_count)
+                    .map(|bgra| {
+                        egui::Color32::from_rgba_unmultiplied(
+                            bgra[2], bgra[1], bgra[0], 255,
+                        )
+                    })
+                    .collect()
+            }
         };
+        
+        println!("[UI] Conversion done, {} pixels", pixels.len());
         
         Ok(egui::ColorImage {
             size: [frame_data.width as usize, frame_data.height as usize],
@@ -524,9 +626,11 @@ impl eframe::App for RegionApp {
         if let Some((target_width, target_height)) = self.pending_resize {
             self.resize_frame_count += 1;
             
-            // Attendre 5 frames avant de redimensionner pour laisser le window manager
+            // Attendre plus de frames sur Wayland pour laisser le window manager
             // traiter la sortie du plein écran
-            if self.resize_frame_count >= 5 {
+            let frames_to_wait = if is_wayland() { 15 } else { 5 };
+            
+            if self.resize_frame_count >= frames_to_wait {
                 let window_width = target_width as f32;
                 let window_height = target_height as f32;
                 
@@ -534,6 +638,7 @@ impl eframe::App for RegionApp {
                 println!("Frame count: {}", self.resize_frame_count);
                 println!("Taille cible: {}x{}", window_width, window_height);
                 
+                // Sur Wayland, envoyer plusieurs fois la commande de taille
                 ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(
                     egui::vec2(window_width, window_height)
                 ));
@@ -965,6 +1070,7 @@ async fn capture_task_continuous(
     target_fps: u32,
     tx: UnboundedSender<StatsUpdate>,
     mut stop_rx: UnboundedReceiver<()>,
+    existing_backend: Option<Box<dyn CaptureBackend>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Valider la région avant de commencer
     let region = Rectangle {
@@ -974,14 +1080,19 @@ async fn capture_task_continuous(
         height: region.height.min(2160).max(1),
     };
     
-    // Use the appropriate backend for the display server
-    let mut backend: Box<dyn CaptureBackend> = if is_wayland() {
-        println!("Using Portal backend (Wayland)");
+    // Réutiliser le backend existant ou en créer un nouveau
+    let mut backend: Box<dyn CaptureBackend> = if let Some(backend) = existing_backend {
+        println!("Réutilisation du backend Portal existant (pas de nouveau dialogue)");
+        backend
+    } else if is_wayland() {
+        println!("Using Portal backend (Wayland) - nouveau dialogue");
         Box::new(PortalBackend::new())
     } else {
         println!("Using X11 backend");
         Box::new(AutoBackend::new()?)
     };
+    
+    // Mettre à jour la région sur le backend (réinitialise pour la nouvelle région)
     backend.init(region).await?;
     
     let mut profiler = FrameProfiler::new(30);
@@ -1089,7 +1200,7 @@ async fn capture_task_continuous(
                 width: frame.width,
                 height: frame.height,
                 data: arc_buffer,
-                _format: frame.format,
+                format: frame.format,
             };
             let _ = tx.send(StatsUpdate::Frame(frame_data));
         }
