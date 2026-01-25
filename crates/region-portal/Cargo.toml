@@ -1,0 +1,28 @@
+[package]
+name = "region-portal"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+region-core = { workspace = true }
+region-capture = { workspace = true }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+ashpd = { workspace = true }
+pipewire = { workspace = true }
+libspa = { workspace = true }
+crossbeam-channel = "0.5"
+libc = "0.2"
+log = "0.4"
+
+# EGL/OpenGL for DmaBuf import
+khronos-egl = { version = "6.0", features = ["dynamic"] }
+gl = "0.14"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
