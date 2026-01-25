@@ -28,7 +28,7 @@ description: |
 
   ⚠️ BETA: This is a beta version. Please report issues on GitHub.
 
-grade: devel
+grade: stable
 confinement: strict
 
 website: https://github.com/solarpush/region-to-share
@@ -59,11 +59,11 @@ apps:
       - unity7
       - gsettings
       # Portal/PipeWire for Wayland screen capture
-      - screencast-legacy
-      - pipewire
+      # - screencast-legacy
+      # - pipewire
       # Audio interfaces often required for full PipeWire access
-      - audio-playback
-      - audio-record
+      # - audio-playback
+      # - audio-record
     environment:
       # OpenGL - use host drivers
       LIBGL_DRIVERS_PATH: "/usr/lib/x86_64-linux-gnu/dri:$SNAP/usr/lib/x86_64-linux-gnu/dri"
