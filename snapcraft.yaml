@@ -7,7 +7,7 @@ description: |
   and display it in a window that you can share directly 
   in your video conferencing applications (Google Meet, Teams, Discord, etc.).
 
-  Version 2.0 - Complete Rust rewrite with improved performance.
+  Version 2.0 beta channel Complete Rust rewrite wih improved performance.
   
   What's new:
   - Native Rust implementation (no Python dependencies)
