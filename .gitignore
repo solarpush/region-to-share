@@ -2,7 +2,7 @@
 /target/
 **/*.rs.bk
 *.pdb
-Cargo.lock
+# Cargo.lock intentionnellement versionné (binaire) — requis pour flatpak-cargo-generator
 
 # IDE
 .vscode/
@@ -28,3 +28,10 @@ trace.json
 # Temporary files
 *.tmp
 *.log
+
+# Flatpak build artifacts
+build-flatpak/
+.flatpak-builder/
+# cargo-sources.json est généré (flatpak-cargo-generator) → ne pas versionner
+# EXCEPTION : si vous voulez le commettre pour Flathub CI, retirez la ligne suivante
+cargo-sources.json

@@ -12,6 +12,11 @@ use std::fs;
 use rayon::prelude::*;
 use clap::Parser;
 use log::{debug, info, error, trace};
+use rust_i18n::t;
+
+rust_i18n::i18n!("locales", fallback = "en");
+
+const DEFAULT_WINDOW_SIZE: [f32; 2] = [400.0, 350.0];
 
 /// Region to Share - Screen region capture and streaming tool
 #[derive(Parser, Debug)]
@@ -48,7 +53,23 @@ fn main() -> Result<(), eframe::Error> {
         .filter_level(log_level)
         .format_timestamp_millis()
         .init();
-    
+
+    // Load config first so we can honour the saved language preference
+    let config = Config::new();
+
+    // Locale priority: saved setting > env var > "en"
+    let lang = if !config.settings.language.is_empty() {
+        config.settings.language.clone()
+    } else {
+        let locale = sys_locale::get_locale().unwrap_or_else(|| String::from("en"));
+        locale
+            .split(|c: char| c == '-' || c == '_')
+            .next()
+            .unwrap_or("en")
+            .to_owned()
+    };
+    rust_i18n::set_locale(&lang);
+
     info!("Region to Share v{}", env!("CARGO_PKG_VERSION"));
     debug!("Debug logging enabled");
     debug!("Session type: {}", if is_wayland() { "Wayland" } else { "X11" });
@@ -57,7 +78,8 @@ fn main() -> Result<(), eframe::Error> {
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([400.0, 350.0])
+            .with_inner_size(DEFAULT_WINDOW_SIZE)
+            .with_min_inner_size(DEFAULT_WINDOW_SIZE)
             .with_title("Region to Share")
             .with_resizable(true),
         ..Default::default()
@@ -67,7 +89,7 @@ fn main() -> Result<(), eframe::Error> {
         "Region to Share",
         options,
         Box::new(move |_cc| {
-            Ok(Box::new(RegionApp::new(runtime)))
+            Ok(Box::new(RegionApp::new(runtime, config)))
         }),
     )
 }
@@ -131,10 +153,8 @@ enum StatsUpdate {
 }
 
 impl RegionApp {
-    fn new(runtime: tokio::runtime::Runtime) -> Self {
+    fn new(runtime: tokio::runtime::Runtime, config: Config) -> Self {
         let (_tx, rx) = mpsc::unbounded_channel();
-        
-        let config = Config::new();
         
         // Charger la dernière région si disponible
         let (x, y, width, height) = if let Some(last_region) = config.get_last_region() {
@@ -607,7 +627,7 @@ impl eframe::App for RegionApp {
                     if !self.selection_ready {
                         ui.vertical_centered(|ui| {
                             ui.add_space(300.0);
-                            ui.heading("Capture de l'ecran...");
+                            ui.heading(t!("selection.loading"));
                             ui.spinner();
                         });
                         return;
@@ -638,8 +658,8 @@ impl eframe::App for RegionApp {
                     
                     ui.vertical_centered(|ui| {
                         ui.add_space(10.0);
-                        ui.heading("Selectionnez une region");
-                        ui.label("Cliquez et glissez pour selectionner | Echap pour annuler");
+                        ui.heading(t!("selection.title"));
+                        ui.label(t!("selection.hint"));
                     });
                     
                     // Zone de sélection
@@ -666,7 +686,7 @@ impl eframe::App for RegionApp {
                         // Annuler la sélection et revenir en mode normal
                         ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
                         ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(true));
-                        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(900.0, 700.0)));
+                        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(DEFAULT_WINDOW_SIZE[0], DEFAULT_WINDOW_SIZE[1])));
                         ctx.send_viewport_cmd(egui::ViewportCommand::Resizable(true));
                         self.selecting_region = false;
                         self.screenshot_texture = None;
@@ -675,32 +695,53 @@ impl eframe::App for RegionApp {
                     // Dessiner la sélection
                     if let (Some(start), Some(end)) = (self.selection_start, self.selection_end) {
                         let sel_rect = egui::Rect::from_two_pos(start, end);
-                        
-                        // Rectangle de sélection
+
+                        let w = sel_rect.width().abs();
+                        let h = sel_rect.height().abs();
+                        let too_small = w < DEFAULT_WINDOW_SIZE[0] || h < DEFAULT_WINDOW_SIZE[1];
+
+                        let (stroke_color, fill_color) = if too_small {
+                            (
+                                egui::Color32::from_rgb(255, 60, 60),
+                                egui::Color32::from_rgba_unmultiplied(255, 60, 60, 60),
+                            )
+                        } else {
+                            (
+                                egui::Color32::from_rgb(0, 255, 0),
+                                egui::Color32::from_rgba_unmultiplied(0, 255, 0, 60),
+                            )
+                        };
+
                         ui.painter().rect_stroke(
                             sel_rect,
                             0.0,
-                            egui::Stroke::new(3.0, egui::Color32::from_rgb(0, 255, 0)),
+                            egui::Stroke::new(3.0, stroke_color),
                         );
                         ui.painter().rect_filled(
                             sel_rect,
                             0.0,
-                            egui::Color32::from_rgba_unmultiplied(0, 255, 0, 60),
+                            fill_color,
                         );
-                        
-                        let w = (sel_rect.width()).abs() as i32;
-                        let h = (sel_rect.height()).abs() as i32;
+
+                        let wi = w as i32;
+                        let hi = h as i32;
                         let x = sel_rect.min.x as i32;
                         let y = sel_rect.min.y as i32;
-                        
+
                         // Info en haut à gauche de la sélection
                         let text_pos = egui::Pos2::new(sel_rect.min.x, sel_rect.min.y - 25.0);
+                        let label = if too_small {
+                            format!("{}x{} — min {}x{} (Result is too small and resizing is required with deformation)", wi, hi,
+                                DEFAULT_WINDOW_SIZE[0] as i32, DEFAULT_WINDOW_SIZE[1] as i32)
+                        } else {
+                            format!("{}x{} at ({}, {})", wi, hi, x, y)
+                        };
                         ui.painter().text(
                             text_pos,
                             egui::Align2::LEFT_BOTTOM,
-                            format!("{}x{} at ({}, {})", w, h, x, y),
+                            label,
                             egui::FontId::proportional(18.0),
-                            egui::Color32::WHITE,
+                            if too_small { egui::Color32::from_rgb(255, 120, 120) } else { egui::Color32::WHITE },
                         );
                     }
                 });
@@ -787,69 +828,69 @@ impl eframe::App for RegionApp {
             
             // Modal d'options pendant le streaming
             if self.show_streaming_options {
-                egui::Window::new("Options")
+                egui::Window::new(t!("streaming_options.title"))
                     .collapsible(false)
                     .resizable(false)
                     .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                     .show(ctx, |ui| {
-                        ui.heading("Options de streaming");
+                        ui.heading(t!("streaming_options.heading"));
                         ui.separator();
                         
                         // Stats de performance
                         if self.config.settings.show_performance {
-                            ui.label("📊 Performance");
+                            ui.label(t!("stats.performance"));
                             ui.horizontal(|ui| {
-                                ui.label(format!("FPS: {:.1}", self.current_fps));
+                                ui.label(format!("{}: {:.1}", t!("stats.fps"), self.current_fps));
                                 ui.separator();
-                                ui.label(format!("Capture: {:.2}ms", self.current_capture_ms));
+                                ui.label(format!("{}: {:.2}ms", t!("stats.capture"), self.current_capture_ms));
                             });
                             
-                            ui.label("💻 Ressources système");
+                            ui.label(t!("stats.system_resources"));
                             ui.horizontal(|ui| {
                                 ui.label(format!("CPU: {:.1}%", self.cpu_usage));
                                 ui.separator();
                                 ui.label(format!("RAM: {:.1} MB", self.memory_mb));
                             });
                             ui.horizontal(|ui| {
-                                ui.label(format!("Débit: {:.2} MB/s", self.data_rate_mbps));
+                                ui.label(format!("{}: {:.2} MB/s", t!("stats.datarate"), self.data_rate_mbps));
                                 ui.separator();
-                                ui.label(format!("Frames: {}", self.frames_captured));
+                                ui.label(format!("{}: {}", t!("stats.frames"), self.frames_captured));
                             });
                             ui.separator();
                         }
                         
                         // Frame rate
                         ui.horizontal(|ui| {
-                            ui.label("Frame Rate:");
+                            ui.label(t!("settings.framerate"));
                             let mut frame_rate = self.config.settings.frame_rate as i32;
                             if ui.add(egui::Slider::new(&mut frame_rate, 15..=120).suffix(" FPS")).changed() {
                                 self.config.set_frame_rate(frame_rate as u32);
                             }
                         });
                         
-                        ui.checkbox(&mut self.config.settings.show_performance, "Afficher performances");
+                        ui.checkbox(&mut self.config.settings.show_performance, t!("settings.show_performance_short"));
                         
                         ui.separator();
                         
                         ui.horizontal(|ui| {
-                            if ui.button("Nouvelle sélection").clicked() {
+                            if ui.button(t!("action.new_selection")).clicked() {
                                 self.stop_capture();
                                 self.streaming_only = false;
                                 self.show_streaming_options = false;
                                 self.start_region_selection(ctx);
                             }
                             
-                            if ui.button("Arrêter").clicked() {
+                            if ui.button(t!("action.stop")).clicked() {
                                 self.stop_capture();
                                 self.streaming_only = false;
                                 self.show_streaming_options = false;
-                                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(400.0, 300.0)));
+                                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(DEFAULT_WINDOW_SIZE[0], DEFAULT_WINDOW_SIZE[1])));
                             }
                         });
                         
                         ui.separator();
                         
-                        if ui.button("Fermer").clicked() {
+                        if ui.button(t!("action.close")).clicked() {
                             self.show_streaming_options = false;
                             if let Err(e) = self.config.save() {
                                 error!("[Config] Save error: {}", e);
@@ -870,11 +911,11 @@ impl eframe::App for RegionApp {
                 ui.add_space(20.0);
                 ui.heading("Region to Share");
                 ui.add_space(10.0);
-                ui.label("Capturez et partagez une région de votre écran");
+                ui.label(t!("main.subtitle"));
                 ui.add_space(30.0);
                 
                 // Bouton principal de sélection
-                if ui.add_sized([200.0, 50.0], egui::Button::new("🖱 Sélectionner une région")).clicked() {
+                if ui.add_sized([200.0, 50.0], egui::Button::new(format!("🖱 {}", t!("action.select_region")))).clicked() {
                     self.start_region_selection(ctx);
                 }
                 
@@ -883,8 +924,8 @@ impl eframe::App for RegionApp {
                 // Dernière région si disponible
                 if self.config.settings.remember_last_region {
                     if let Some(last) = self.config.get_last_region() {
-                        ui.label(format!("Dernière région: {}x{} à ({}, {})", last.width, last.height, last.x, last.y));
-                        if ui.button("Réutiliser").clicked() {
+                        ui.label(t!("main.last_region", w = last.width.to_string(), h = last.height.to_string(), x = last.x.to_string(), y = last.y.to_string()));
+                        if ui.button(t!("action.reuse")).clicked() {
                             self.x = last.x;
                             self.y = last.y;
                             self.width = last.width;
@@ -902,9 +943,11 @@ impl eframe::App for RegionApp {
             ui.separator();
             
             // Paramètres (toujours visibles, compacts)
-            ui.collapsing("⚙ Paramètres", |ui| {
+            ui.collapsing(format!("⚙ {}", t!("settings.title")), |ui| {
+                egui::ScrollArea::vertical()
+                    .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label("Frame Rate:");
+                    ui.label(t!("settings.framerate"));
                     let mut frame_rate = self.config.settings.frame_rate as i32;
                     if ui.add(egui::Slider::new(&mut frame_rate, 15..=120).suffix(" FPS")).changed() {
                         self.config.set_frame_rate(frame_rate as u32);
@@ -912,48 +955,82 @@ impl eframe::App for RegionApp {
                 });
                 
                 ui.add_space(5.0);
-                ui.label("🪟 Fenêtre");
+                ui.label(t!("settings.window"));
                 ui.horizontal(|ui| {
-                    ui.label("Opacité:");
+                    ui.label(t!("settings.opacity"));
                     let mut opacity = self.config.settings.window_opacity;
                     if ui.add(egui::Slider::new(&mut opacity, 0.3..=1.0).show_value(true)).changed() {
                         self.config.set_window_opacity(opacity);
                     }
                 });
                 
-                ui.checkbox(&mut self.config.settings.auto_send_to_background, 
-                    "Envoyer en arrière-plan après sélection (X11) / Réduire (Wayland)");
+                ui.checkbox(&mut self.config.settings.auto_send_to_background,
+                    t!("settings.send_to_background"));
                 
                 ui.add_space(5.0);
-                ui.label("📍 Région");
-                ui.checkbox(&mut self.config.settings.remember_last_region, "Se souvenir de la dernière région");
-                ui.checkbox(&mut self.config.settings.auto_use_specific_region, 
-                    "Utiliser automatiquement la dernière région au démarrage");
+                ui.label(t!("settings.region"));
+                ui.checkbox(&mut self.config.settings.remember_last_region, t!("settings.remember_region"));
+                ui.checkbox(&mut self.config.settings.auto_use_specific_region,
+                    t!("settings.auto_use_region"));
                 
                 ui.add_space(5.0);
-                ui.checkbox(&mut self.config.settings.show_performance, "Afficher les performances");
-                
+                ui.checkbox(&mut self.config.settings.show_performance, t!("settings.show_performance"));
+
+                ui.add_space(5.0);
+                ui.label(t!("settings.language"));
+                let languages = [("auto", t!("settings.lang_auto")), ("fr", "Français".into()), ("en", "English".into())];
+                let current = if self.config.settings.language.is_empty() {
+                    "auto"
+                } else {
+                    &self.config.settings.language
+                };
+                let mut selected = current.to_owned();
+                egui::ComboBox::from_id_salt("language_selector")
+                    .selected_text(languages.iter().find(|(k, _)| *k == selected).map(|(_, v)| v.as_ref()).unwrap_or(selected.as_str()))
+                    .show_ui(ui, |ui| {
+                        for (key, label) in &languages {
+                            ui.selectable_value(&mut selected, key.to_string(), label.as_ref());
+                        }
+                    });
+                if selected != current {
+                    let new_lang = if selected == "auto" { String::new() } else { selected.clone() };
+                    self.config.settings.language = new_lang;
+                    let locale_to_apply = if selected == "auto" {
+                        sys_locale::get_locale()
+                            .unwrap_or_else(|| String::from("en"))
+                            .split(|c: char| c == '-' || c == '_')
+                            .next()
+                            .unwrap_or("en")
+                            .to_owned()
+                    } else {
+                        selected
+                    };
+                    rust_i18n::set_locale(&locale_to_apply);
+                    let _ = self.config.save();
+                }
+
                 ui.add_space(5.0);
                 ui.horizontal(|ui| {
-                    ui.label("Raccourci global:");
+                    ui.label(t!("settings.global_shortcut"));
                     let mut shortcut = self.config.settings.global_shortcut.clone();
                     if ui.text_edit_singleline(&mut shortcut).changed() {
                         self.config.settings.global_shortcut = shortcut;
                     }
                 });
-                ui.label("(Ex: Meta+Ctrl+W pour toggle capture)");
+                ui.label(t!("settings.shortcut_hint"));
                 
                 ui.add_space(10.0);
-                if ui.button("💾 Sauvegarder").clicked() {
+                if ui.button(t!("action.save")).clicked() {
                     if let Err(e) = self.config.save() {
                         error!("[Config] Save error: {}", e);
                     }
                 }
+                }); // end ScrollArea
             });
             
             ui.add_space(10.0);
             ui.vertical_centered(|ui| {
-                ui.label("La fenêtre de streaming peut être partagée dans Meet, Discord, OBS...");
+                ui.label(t!("main.streaming_hint"));
             });
         });
         
