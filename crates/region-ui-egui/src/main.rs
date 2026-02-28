@@ -413,12 +413,12 @@ impl RegionApp {
                 let _ = self.config.save();
             }
             
-            // Sortir du plein écran
+            // Sortir du plein écran (les décorations seront gérées par le handler
+            // pending_resize qui les désactive si streaming_only = true)
             ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
-            ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(true));
             ctx.send_viewport_cmd(egui::ViewportCommand::Resizable(true));
             
-            // Marquer le redimensionnement en attente
+            // Marquer le redimensionnement en attente (pixels physiques)
             self.pending_resize = Some((self.width, self.height));
             self.resize_frame_count = 0;
             
@@ -578,13 +578,24 @@ impl eframe::App for RegionApp {
             
             // Attendre plus de frames sur Wayland pour laisser le window manager
             // traiter la sortie du plein écran
-            let frames_to_wait = if is_wayland() { 15 } else { 5 };
+            let frames_to_wait = if is_wayland() { 30 } else { 5 };
             
             if self.resize_frame_count >= frames_to_wait {
-                let window_width = target_width as f32;
-                let window_height = target_height as f32;
-                
-                // Sur Wayland, envoyer plusieurs fois la commande de taille
+                // Convertir les pixels physiques en pixels logiques (correct HiDPI)
+                let ppp = ctx.pixels_per_point();
+                let window_width = target_width as f32 / ppp;
+                let window_height = target_height as f32 / ppp;
+
+                // En mode streaming : supprimer les décorations pour que
+                // InnerSize == taille totale visible (pas de barre de titre décalée)
+                if self.streaming_only {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(false));
+                }
+
+                // Relâcher la contrainte min avant de redimensionner
+                ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(
+                    egui::vec2(window_width, window_height)
+                ));
                 ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(
                     egui::vec2(window_width, window_height)
                 ));
@@ -686,6 +697,7 @@ impl eframe::App for RegionApp {
                         // Annuler la sélection et revenir en mode normal
                         ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
                         ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(true));
+                        ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(egui::vec2(DEFAULT_WINDOW_SIZE[0], DEFAULT_WINDOW_SIZE[1])));
                         ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(DEFAULT_WINDOW_SIZE[0], DEFAULT_WINDOW_SIZE[1])));
                         ctx.send_viewport_cmd(egui::ViewportCommand::Resizable(true));
                         self.selecting_region = false;
@@ -767,10 +779,44 @@ impl eframe::App for RegionApp {
                         );
                     }
                     
-                    // Boutons en haut à droite (options + arrière-plan)
+                    // Drag pour déplacer la fenêtre (pas de décoration = on gère soi-même)
                     let button_size = egui::vec2(28.0, 28.0);
                     let spacing = 5.0;
-                    
+
+                    // Calculer les rects des boutons à l'avance pour les exclure du drag
+                    let gear_rect = egui::Rect::from_min_size(
+                        egui::pos2(ui.max_rect().right() - button_size.x - 5.0, ui.max_rect().top() + 5.0),
+                        button_size,
+                    );
+                    let bg_rect = egui::Rect::from_min_size(
+                        egui::pos2(ui.max_rect().right() - button_size.x * 2.0 - spacing * 2.0 - 5.0, ui.max_rect().top() + 5.0),
+                        button_size,
+                    );
+
+                    let drag_response = ui.allocate_rect(ui.max_rect(), egui::Sense::click_and_drag());
+
+                    // Curseur Move au survol (hors boutons et hors modal options)
+                    if !self.show_streaming_options {
+                        if let Some(hover_pos) = ctx.input(|i| i.pointer.hover_pos()) {
+                            let over_button = gear_rect.contains(hover_pos)
+                                || (!Self::is_wayland() && bg_rect.contains(hover_pos));
+                            if !over_button {
+                                ctx.set_cursor_icon(egui::CursorIcon::Move);
+                            }
+                        }
+                    }
+
+                    if drag_response.drag_started() {
+                        if let Some(pos) = ctx.input(|i| i.pointer.press_origin()) {
+                            let over_button = gear_rect.contains(pos)
+                                || (!Self::is_wayland() && bg_rect.contains(pos));
+                            if !over_button {
+                                ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                            }
+                        }
+                    }
+
+                    // Boutons en haut à droite (options + arrière-plan)
                     // Bouton arrière-plan (↓) - seulement sur X11
                     if !Self::is_wayland() {
                         let bg_button_pos = egui::pos2(
@@ -795,6 +841,9 @@ impl eframe::App for RegionApp {
                             egui::Color32::WHITE,
                         );
                         
+                        if bg_response.hovered() {
+                            ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
+                        }
                         if bg_response.clicked() {
                             Self::lower_window_x11();
                         }
@@ -821,6 +870,9 @@ impl eframe::App for RegionApp {
                         egui::Color32::WHITE,
                     );
                     
+                    if response.hovered() {
+                        ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
+                    }
                     if response.clicked() {
                         self.show_streaming_options = !self.show_streaming_options;
                     }
@@ -877,6 +929,12 @@ impl eframe::App for RegionApp {
                                 self.stop_capture();
                                 self.streaming_only = false;
                                 self.show_streaming_options = false;
+                                // Réactiver les décorations et revenir à la taille par défaut
+                                // avant que le plein écran de sélection ne se déclenche
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(true));
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Resizable(true));
+                                ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(egui::vec2(DEFAULT_WINDOW_SIZE[0], DEFAULT_WINDOW_SIZE[1])));
+                                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(DEFAULT_WINDOW_SIZE[0], DEFAULT_WINDOW_SIZE[1])));
                                 self.start_region_selection(ctx);
                             }
                             
@@ -884,6 +942,10 @@ impl eframe::App for RegionApp {
                                 self.stop_capture();
                                 self.streaming_only = false;
                                 self.show_streaming_options = false;
+                                // Réactiver les décorations pour revenir au mode UI normal
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(true));
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Resizable(true));
+                                ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(egui::vec2(DEFAULT_WINDOW_SIZE[0], DEFAULT_WINDOW_SIZE[1])));
                                 ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(DEFAULT_WINDOW_SIZE[0], DEFAULT_WINDOW_SIZE[1])));
                             }
                         });
@@ -933,6 +995,8 @@ impl eframe::App for RegionApp {
                             self.streaming_only = true;
                             self.pending_resize = Some((self.width, self.height));
                             self.resize_frame_count = 0;
+                            // Supprimer les décorations pour le mode streaming
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(false));
                             ctx.request_repaint();
                         }
                     }
