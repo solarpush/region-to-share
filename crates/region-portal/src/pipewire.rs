@@ -209,6 +209,74 @@ fn extract_region(frame: &PipeWireFrame, region: &Rectangle) -> Arc<Vec<u8>> {
     Arc::new(dst)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_frame(width: u32, height: u32) -> PipeWireFrame {
+        let bpp = 4;
+        let size = (width * height * bpp as u32) as usize;
+        let mut data = vec![0u8; size];
+        // Fill with a pattern: each pixel's first byte = (x + y * width) % 256
+        for y in 0..height {
+            for x in 0..width {
+                let offset = ((y * width + x) as usize) * bpp;
+                data[offset] = ((x + y * width) % 256) as u8;
+                data[offset + 1] = 0;
+                data[offset + 2] = 0;
+                data[offset + 3] = 255;
+            }
+        }
+        PipeWireFrame {
+            width,
+            height,
+            data: Arc::new(data),
+            format: PixelFormat::BGRA8888,
+            timestamp: Instant::now(),
+        }
+    }
+
+    #[test]
+    fn extract_region_full_frame() {
+        let frame = make_frame(100, 100);
+        let region = Rectangle::new(0, 0, 100, 100);
+        let result = extract_region(&frame, &region);
+        assert_eq!(result.len(), frame.data.len());
+    }
+
+    #[test]
+    fn extract_region_subset() {
+        let frame = make_frame(100, 100);
+        let region = Rectangle::new(10, 20, 30, 40);
+        let result = extract_region(&frame, &region);
+        let bpp = 4;
+        let expected_size = 30 * 40 * bpp;
+        assert_eq!(result.len(), expected_size);
+
+        // Verify first pixel of extracted region matches source
+        let src_offset = (20 * 100 + 10) * bpp;
+        assert_eq!(result[0], frame.data[src_offset]);
+    }
+
+    #[test]
+    fn extract_region_with_scaled_coordinates() {
+        // Simulate fractional scaling: frame is 5120x2160, region is in
+        // scaled coordinates that have been properly adjusted
+        let frame = make_frame(200, 100);
+
+        // Without scaling: region at (75, 50, 50, 25) in a 150x75 logical space
+        // After scaling by 200/150 = 1.333: (100, 66, 66, 33)
+        let scaled_region = Rectangle::new(100, 66, 66, 33);
+        let result = extract_region(&frame, &scaled_region);
+        let bpp = 4;
+        assert_eq!(result.len(), 66 * 33 * bpp);
+
+        // Verify first pixel comes from the right source position
+        let src_offset = (66 * 200 + 100) * bpp;
+        assert_eq!(result[0], frame.data[src_offset]);
+    }
+}
+
 /// Run the PipeWire main loop with portal fd (must run on its own thread).
 fn run_pipewire_loop_with_fd(
     node_id: u32,
