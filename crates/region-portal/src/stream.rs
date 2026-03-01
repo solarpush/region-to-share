@@ -135,15 +135,34 @@ impl CaptureBackend for PortalBackend {
     async fn capture_screenshot(&mut self) -> Result<Frame> {
         let pw_stream = self.pipewire_stream.as_mut()
             .ok_or_else(|| CaptureError::CaptureFailed("PipeWire not initialized".to_string()))?;
-        
+
         debug!("[PortalBackend] Capturing screenshot...");
-        // For screenshot, capture the full screen
-        let full_region = Rectangle::new(0, 0, self.screen_size.0, self.screen_size.1);
-        let frame = pw_stream.capture_frame(full_region).await?;
+        // First capture to discover actual PipeWire frame dimensions.
+        // Portal-reported size may differ from the native stream resolution
+        // (e.g. portal says 3840x2160 but PipeWire delivers 5120x2160).
+        // After this call, pw_stream.stream_size() returns the real dimensions.
+        let probe_region = Rectangle::new(0, 0, self.screen_size.0, self.screen_size.1);
+        let _ = pw_stream.capture_frame(probe_region).await?;
+
+        let (actual_w, actual_h) = pw_stream.stream_size();
+        let frame = if actual_w != self.screen_size.0 || actual_h != self.screen_size.1 {
+            info!(
+                "[PortalBackend] Actual stream size: {}x{} (portal reported: {}x{})",
+                actual_w, actual_h, self.screen_size.0, self.screen_size.1
+            );
+            self.screen_size = (actual_w, actual_h);
+            // Recapture at the correct native resolution
+            let full_region = Rectangle::new(0, 0, actual_w, actual_h);
+            pw_stream.capture_frame(full_region).await?
+        } else {
+            // Portal size matches stream — the probe result was already correct,
+            // but we discarded it, so capture once more.
+            pw_stream.capture_frame(probe_region).await?
+        };
         self.sequence += 1;
-        
+
         debug!("[PortalBackend] Screenshot captured: {}x{}", frame.width, frame.height);
-        
+
         Ok(frame)
     }
 
@@ -178,5 +197,33 @@ impl CaptureBackend for PortalBackend {
             let _ = portal.close().await;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_new_backend() {
+        let backend = PortalBackend::new();
+        assert!(backend.portal.is_none());
+        assert!(backend.pipewire_stream.is_none());
+        assert_eq!(backend.screen_size, (1920, 1080));
+        assert_eq!(backend.sequence, 0);
+    }
+
+    #[test]
+    fn test_default_backend() {
+        let backend = PortalBackend::default();
+        assert!(backend.portal.is_none());
+        assert!(backend.pipewire_stream.is_none());
+        assert_eq!(backend.screen_size, (1920, 1080));
+    }
+
+    #[test]
+    fn test_is_wayland() {
+        // Just verify the method doesn't panic
+        let _ = PortalBackend::is_wayland();
     }
 }
