@@ -882,9 +882,10 @@ impl eframe::App for RegionApp {
             if self.show_streaming_options {
                 egui::Window::new(t!("streaming_options.title"))
                     .collapsible(false)
-                    .resizable(false)
+                    .resizable(true)
                     .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                     .show(ctx, |ui| {
+                        egui::ScrollArea::both().show(ui, |ui| {
                         ui.heading(t!("streaming_options.heading"));
                         ui.separator();
                         
@@ -958,6 +959,7 @@ impl eframe::App for RegionApp {
                                 error!("[Config] Save error: {}", e);
                             }
                         }
+                        }); // end ScrollArea
                     });
             }
             
@@ -1008,7 +1010,7 @@ impl eframe::App for RegionApp {
             
             // Paramètres (toujours visibles, compacts)
             ui.collapsing(format!("⚙ {}", t!("settings.title")), |ui| {
-                egui::ScrollArea::vertical()
+                egui::ScrollArea::both()
                     .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(t!("settings.framerate"));

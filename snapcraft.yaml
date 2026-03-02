@@ -1,6 +1,7 @@
 name: region-to-share
 base: core24
-version: '2.0.0-beta1'
+version: '2.0.0-beta2'
+title: Region-to-Share
 summary: Share selected screen regions in video calls
 description: |
   Region-to-Share allows you to select a specific area of your screen
@@ -36,7 +37,8 @@ source-code: https://github.com/solarpush/region-to-share
 
 donation:
   - https://coff.ee/solarpush
-
+contact: https://github.com/solarpush/region-to-share
+license: MIT
 platforms:
   amd64:
     build-on: [amd64]
