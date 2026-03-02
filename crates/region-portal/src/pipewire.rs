@@ -173,6 +173,32 @@ impl PipeWireStream {
         (self.stream_width, self.stream_height)
     }
 
+    /// Lit silencieusement un frame du channel pour initialiser les vraies
+    /// dimensions du stream PipeWire. À appeler une fois après la connexion,
+    /// avant le premier capture_frame(), pour que stream_size() soit fiable
+    /// dès le cold-start (évite le ratio incorrect sur la première capture
+    /// en cas de fractional scaling Wayland).
+    pub async fn probe_stream_size(&mut self) -> (u32, u32) {
+        // Draine d'abord les frames déjà en attente
+        let mut latest: Option<PipeWireFrame> = None;
+        while let Ok(frame) = self.frame_rx.try_recv() {
+            latest = Some(frame);
+        }
+        if latest.is_none() {
+            // Attend un frame jusqu'à 1 seconde
+            let timeout = std::time::Duration::from_secs(1);
+            if let Ok(frame) = self.frame_rx.recv_timeout(timeout) {
+                latest = Some(frame);
+            }
+        }
+        if let Some(frame) = latest {
+            self.stream_width = frame.width;
+            self.stream_height = frame.height;
+            debug!("[PipeWire] probe_stream_size: {}x{}", frame.width, frame.height);
+        }
+        (self.stream_width, self.stream_height)
+    }
+
     /// Disconnect from the stream.
     pub async fn disconnect(&mut self) -> Result<()> {
         if let Some(tx) = self.stop_tx.take() {
@@ -207,6 +233,71 @@ fn extract_region(frame: &PipeWireFrame, region: &Rectangle) -> Arc<Vec<u8>> {
     }
     
     Arc::new(dst)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_frame(width: u32, height: u32) -> PipeWireFrame {
+        let bpp = 4usize;
+        let size = (width as usize) * (height as usize) * bpp;
+        let mut data = vec![0u8; size];
+        for y in 0..height {
+            for x in 0..width {
+                let offset = ((y * width + x) as usize) * bpp;
+                data[offset] = ((x + y * width) % 256) as u8;
+                data[offset + 1] = 0;
+                data[offset + 2] = 0;
+                data[offset + 3] = 255;
+            }
+        }
+        PipeWireFrame {
+            width,
+            height,
+            data: Arc::new(data),
+            format: PixelFormat::BGRA8888,
+            timestamp: Instant::now(),
+        }
+    }
+
+    #[test]
+    fn extract_region_full_frame() {
+        let frame = make_frame(100, 100);
+        let region = Rectangle::new(0, 0, 100, 100);
+        let result = extract_region(&frame, &region);
+        assert_eq!(result.len(), frame.data.len());
+    }
+
+    #[test]
+    fn extract_region_subset() {
+        let frame = make_frame(100, 100);
+        let region = Rectangle::new(10, 20, 30, 40);
+        let result = extract_region(&frame, &region);
+        let bpp = 4usize;
+        let expected_size = 30 * 40 * bpp;
+        assert_eq!(result.len(), expected_size);
+
+        // Vérifie que le premier pixel extrait correspond à la bonne position source
+        let src_offset = (20 * 100 + 10) * bpp;
+        assert_eq!(result[0], frame.data[src_offset]);
+    }
+
+    #[test]
+    fn extract_region_with_scaled_coordinates() {
+        // Simule le fractional scaling : frame à 200x100, région en coordonnées scalées
+        let frame = make_frame(200, 100);
+
+        // Sans scaling : région (75, 50, 50, 25) dans un espace logique 150x75
+        // Après scaling ×1.333 : (100, 66, 66, 33)
+        let scaled_region = Rectangle::new(100, 66, 66, 33);
+        let result = extract_region(&frame, &scaled_region);
+        let bpp = 4usize;
+        assert_eq!(result.len(), 66 * 33 * bpp);
+
+        let src_offset = (66 * 200 + 100) * bpp;
+        assert_eq!(result[0], frame.data[src_offset]);
+    }
 }
 
 /// Run the PipeWire main loop with portal fd (must run on its own thread).

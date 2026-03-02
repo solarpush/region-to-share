@@ -40,19 +40,37 @@ fn is_wayland() -> bool {
 fn main() -> Result<(), eframe::Error> {
     let args = Args::parse();
     
-    // Initialize logger based on flags
-    let log_level = if args.verbose {
-        log::LevelFilter::Trace
+    // Initialize logger based on flags.
+    //
+    // --debug  : nos crates en DEBUG, dépendances bruyantes (zbus, sctk,
+    //            winit, eframe, wgpu…) réduites à WARN → logs propres
+    //            avec config et valeurs reçues.
+    // --verbose: tout en TRACE, utile pour investiguer les dépendances
+    //            (ex. protocole D-Bus, PipeWire, rendu GPU).
+    let mut builder = env_logger::Builder::new();
+
+    if args.verbose {
+        // Tout en Trace — spam assumé
+        builder.filter_level(log::LevelFilter::Trace);
     } else if args.debug {
-        log::LevelFilter::Debug
+        // Dépendances bruyantes → Warn
+        builder.filter_level(log::LevelFilter::Warn);
+        // Nos crates → Debug
+        for crate_name in &[
+            "region_ui_egui",
+            "region_portal",
+            "region_capture",
+            "region_core",
+            "region_config",
+        ] {
+            builder.filter_module(crate_name, log::LevelFilter::Debug);
+        }
     } else {
-        log::LevelFilter::Warn
-    };
-    
-    env_logger::Builder::new()
-        .filter_level(log_level)
-        .format_timestamp_millis()
-        .init();
+        // Mode normal : uniquement les warnings/erreurs
+        builder.filter_level(log::LevelFilter::Warn);
+    }
+
+    builder.format_timestamp_millis().init();
 
     // Load config first so we can honour the saved language preference
     let config = Config::new();
@@ -123,6 +141,11 @@ struct RegionApp {
     background_delay_frames: u32,  // Délai en frames avant minimisation
     // Backend Portal réutilisable (garde la session ouverte)
     portal_backend: Arc<TokioMutex<Option<Box<dyn CaptureBackend>>>>,
+    /// Taille logique renvoyée par get_screen_size() du backend actif.
+    /// Utilisée comme espace de référence pour la conversion des coords de
+    /// sélection. Diffère de la taille native du screenshot en cas de
+    /// fractional scaling Wayland (ex. 3072×864 logique vs 3840×1080 natif).
+    backend_screen_size: Option<(u32, u32)>,
     // Stats système
     cpu_usage: f64,
     memory_mb: f64,
@@ -149,6 +172,10 @@ enum StatsUpdate {
     },
     Frame(FrameData),
     Screenshot(FrameData),
+    /// Taille logique du backend (espace de coordonnées attendu pour les régions).
+    /// Pour le portail Wayland, c'est la taille logique rapportée (≠ pixels natifs
+    /// en cas de fractional scaling). Pour X11, c'est la résolution physique.
+    ScreenSize(u32, u32),
     Stopped,
 }
 
@@ -199,6 +226,7 @@ impl RegionApp {
             pending_send_to_background: auto_start && auto_send_bg,
             background_delay_frames: 0,
             portal_backend: Arc::new(TokioMutex::new(None)),
+            backend_screen_size: None,
             cpu_usage: 0.0,
             memory_mb: 0.0,
             data_rate_mbps: 0.0,
@@ -335,10 +363,13 @@ impl RegionApp {
                 return;
             }
             
-            // Obtenir la taille réelle de l'écran via le backend
+            // Obtenir la taille logique de l'écran via le backend
+            // (espace de coordonnées à utiliser pour les régions).
+            // Pour le portail Wayland, c'est la taille logique rapportée ≠ pixels natifs.
             let (screen_width, screen_height) = backend.get_screen_size().await
                 .unwrap_or((1920, 1080));
-            let _ = (screen_width, screen_height); // Used for reference
+            // Transmettre la taille logique à l'UI avant le screenshot
+            let _ = new_tx.send(StatsUpdate::ScreenSize(screen_width, screen_height));
             
             // Capturer tout l'écran
             if let Ok(frame) = backend.capture_screenshot().await {
@@ -364,13 +395,6 @@ impl RegionApp {
     
     fn apply_selection(&mut self, ctx: &egui::Context) {
         if let (Some(start), Some(end)) = (self.selection_start, self.selection_end) {
-            // Obtenir les dimensions réelles du screenshot
-            let (screenshot_width, screenshot_height) = if let Some(texture) = &self.screenshot_texture {
-                (texture.size()[0] as f32, texture.size()[1] as f32)
-            } else {
-                return;
-            };
-            
             // Obtenir le rectangle où le screenshot a été affiché
             let display_rect = if let Some(rect) = self.screenshot_display_rect {
                 rect
@@ -378,13 +402,32 @@ impl RegionApp {
                 return;
             };
             
-            // Obtenir le facteur de scaling DPI
-            let pixels_per_point = ctx.pixels_per_point();
-            let _ = pixels_per_point; // Used for DPI calculations
+            // Calculer le ratio de l'espace logique du backend vers les points egui.
+            //
+            // On utilise backend_screen_size (taille logique renvoyée par
+            // get_screen_size()) plutôt que la taille native de la texture
+            // screenshot. Sur Wayland avec fractional scaling, la texture est
+            // en pixels natifs (ex. 3840×1080) mais le portail attend des
+            // coordonnées logiques (ex. 3072×864). scale_region_to_stream()
+            // dans PortalBackend se charge ensuite de la conversion vers les
+            // pixels PipeWire natifs. Sans ça, les coordonnées seraient
+            // multipliées deux fois par le facteur de scaling.
+            //
+            // Pour X11 (sans fractional scaling), backend_screen_size == taille
+            // native, ce qui donne le même résultat qu'avant.
+            let (ref_w, ref_h) = if let Some((w, h)) = self.backend_screen_size {
+                (w as f32, h as f32)
+            } else if let Some(texture) = &self.screenshot_texture {
+                // Fallback : utiliser la taille de la texture (ancien comportement)
+                (texture.size()[0] as f32, texture.size()[1] as f32)
+            } else {
+                return;
+            };
             
-            // Calculer le ratio de scaling exact
-            let scale_x = screenshot_width / display_rect.width();
-            let scale_y = screenshot_height / display_rect.height();
+            // Ratio espace-backend / espace-egui (≈ 1.0 sur Wayland portal,
+            // = facteur DPI sur X11 HiDPI)
+            let scale_x = ref_w / display_rect.width();
+            let scale_y = ref_h / display_rect.height();
             
             // Convertir les coordonnées de sélection vers les coordonnées réelles
             let rel_min_x = (start.x.min(end.x) - display_rect.min.x).max(0.0);
@@ -418,8 +461,16 @@ impl RegionApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
             ctx.send_viewport_cmd(egui::ViewportCommand::Resizable(true));
             
-            // Marquer le redimensionnement en attente (pixels physiques)
-            self.pending_resize = Some((self.width, self.height));
+            // pending_resize doit être en egui POINTS (unité de InnerSize).
+            // region_width est en unités backend (portal logique ou pixels physiques
+            // X11). En divisant par scale_x on retrouve les egui points bruts de
+            // sélection, quelle que soit la valeur de ppp ou de scale_x.
+            // • Wayland portal ppp=1.25 : scale_x≈1.0  → window_pts = region_w / 1.0   ✓
+            // • X11 HiDPI     ppp=2.0  : scale_x=2.0  → window_pts = region_w / 2.0   ✓
+            // • X11 no-HiDPI  ppp=1.0  : scale_x=1.0  → window_pts = region_w / 1.0   ✓
+            let window_pts_w = (region_width / scale_x).round().max(DEFAULT_WINDOW_SIZE[0]);
+            let window_pts_h = (region_height / scale_y).round().max(DEFAULT_WINDOW_SIZE[1]);
+            self.pending_resize = Some((window_pts_w as u32, window_pts_h as u32));
             self.resize_frame_count = 0;
             
             ctx.request_repaint();
@@ -464,6 +515,10 @@ impl RegionApp {
                     }
                     StatsUpdate::Screenshot(frame_data) => {
                         last_screenshot = Some(frame_data);
+                    }
+                    StatsUpdate::ScreenSize(w, h) => {
+                        debug!("[UI] backend_screen_size = {}x{}", w, h);
+                        self.backend_screen_size = Some((w, h));
                     }
                     StatsUpdate::Stopped => {
                         self.capturing = false;
@@ -581,10 +636,10 @@ impl eframe::App for RegionApp {
             let frames_to_wait = if is_wayland() { 30 } else { 5 };
             
             if self.resize_frame_count >= frames_to_wait {
-                // Convertir les pixels physiques en pixels logiques (correct HiDPI)
-                let ppp = ctx.pixels_per_point();
-                let window_width = target_width as f32 / ppp;
-                let window_height = target_height as f32 / ppp;
+                // target_width/target_height sont déjà en egui points
+                // (stockés ainsi dans apply_selection), pas besoin de /ppp
+                let window_width = target_width as f32;
+                let window_height = target_height as f32;
 
                 // En mode streaming : supprimer les décorations pour que
                 // InnerSize == taille totale visible (pas de barre de titre décalée)
@@ -916,7 +971,7 @@ impl eframe::App for RegionApp {
                         ui.horizontal(|ui| {
                             ui.label(t!("settings.framerate"));
                             let mut frame_rate = self.config.settings.frame_rate as i32;
-                            if ui.add(egui::Slider::new(&mut frame_rate, 15..=120).suffix(" FPS")).changed() {
+                            if ui.add(egui::Slider::new(&mut frame_rate, 15..=120).suffix(" FPS (60 max on wayland)")).changed() {
                                 self.config.set_frame_rate(frame_rate as u32);
                             }
                         });

@@ -97,7 +97,7 @@ impl PortalCapture {
             .select_sources(
                 &session,
                 cursor_mode,
-                SourceType::Monitor | SourceType::Window,
+                SourceType::Monitor.into(),
                 false,
                 restore_token.as_ref().map(|t| t.0.as_str()),
                 persist_mode,
