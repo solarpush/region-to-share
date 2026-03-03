@@ -1,10 +1,10 @@
 name: region-to-share
 base: core24
 version: '2.0.0-beta2'
-title: Region-to-Share
+title: Region to Share
 summary: Share selected screen regions in video calls
 description: |
-  Region-to-Share allows you to select a specific area of your screen
+  Region to Share allows you to select a specific area of your screen
   and display it in a window that you can share directly 
   in your video conferencing applications (Google Meet, Teams, Discord, etc.).
 
@@ -59,16 +59,14 @@ apps:
       - network
       - unity7
       - gsettings
-      # Portal/PipeWire for Wayland screen capture
-      # - screencast-legacy
-      # - pipewire
-      # Audio interfaces often required for full PipeWire access
-      # - audio-playback
-      # - audio-record
+
     environment:
       # OpenGL - use host drivers
       LIBGL_DRIVERS_PATH: "/usr/lib/x86_64-linux-gnu/dri:$SNAP/usr/lib/x86_64-linux-gnu/dri"
       __EGL_VENDOR_LIBRARY_DIRS: "/usr/share/glvnd/egl_vendor.d:$SNAP/usr/share/glvnd/egl_vendor.d"
+      XCURSOR_PATH: $SNAP/usr/share/icons
+      XCURSOR_THEME: "Adwaita"
+      XDG_DATA_DIRS: "$SNAP/usr/share:$XDG_DATA_DIRS"
 
 parts:
   region-to-share:
@@ -151,6 +149,7 @@ parts:
       - libfontconfig1
       - libfreetype6
       - fonts-dejavu-core
+      - adwaita-icon-theme
     override-build: |
       craftctl default
       

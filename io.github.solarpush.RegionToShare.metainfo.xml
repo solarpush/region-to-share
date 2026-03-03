@@ -91,7 +91,7 @@
 		-->
 	</screenshots>
 	<releases>
-		<release version="2.0.0-beta1" date="2025-10-01">
+		<release version="2.0.0-beta2" date="2025-10-01">
 			<description>
 				<p>
 					Version 2.0 Beta — Complete Rust rewrite.

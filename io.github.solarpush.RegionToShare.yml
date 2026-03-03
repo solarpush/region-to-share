@@ -1,12 +1,12 @@
 app-id: io.github.solarpush.RegionToShare
 runtime: org.freedesktop.Platform
-runtime-version: '24.08'
+runtime-version: '25.08'
 sdk: org.freedesktop.Sdk
 
 # Extensions SDK nécessaires
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable  # toolchain Rust stable
-  - org.freedesktop.Sdk.Extension.llvm18        # clang/libclang pour bindgen (PipeWire)
+  - org.freedesktop.Sdk.Extension.llvm20        # clang/libclang pour bindgen (PipeWire)
 
 command: region-to-share
 separate-locales: false
@@ -17,24 +17,33 @@ finish-args:
   - --socket=fallback-x11     # X11 / XWayland fallback
   - --share=ipc               # Mémoire partagée X11 (MIT-SHM)
   # ── GPU / DMA-BUF ──────────────────────────────────────────────────────────
-  - --device=dri              # Accès GPU (OpenGL / EGL / DMA-BUF)
+  # --device=all est requis (pas seulement dri) pour que le driver Mesa du sandbox
+  # puisse importer les DRM buffers tuilés (modifiers vendor AMD/Intel/Nvidia)
+  # produits par le compositor hôte. Avec --device=dri seul, Mesa sandbox ne
+  # connaît pas les modifiers propriétaires → GL_INVALID_OPERATION.
+  - --device=all
   # ── D-Bus session (XDG Portal) ─────────────────────────────────────────────
   - --socket=session-bus
   - --talk-name=org.freedesktop.portal.Desktop
   - --talk-name=org.freedesktop.portal.ScreenCast
   # ── PipeWire (capture Wayland) ─────────────────────────────────────────────
   - --filesystem=xdg-run/pipewire-0
+  # ── Curseurs Wayland ──────────────────────────────────────────────────────
+  # La runtime org.freedesktop.Platform inclut Adwaita à /usr/share/icons/Adwaita
+  - --env=XCURSOR_PATH=/usr/share/icons
+  - --env=XCURSOR_THEME=Adwaita
+  - --env=XDG_DATA_DIRS=/app/share:/usr/share
 
 # ── Options de build globales ──────────────────────────────────────────────────
 build-options:
-  append-path: /usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/llvm18/bin
+  append-path: /usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/llvm20/bin
   env:
     CARGO_HOME: /run/build/cargo-home
     RUST_BACKTRACE: '1'
     # libclang pour bindgen (crate pipewire)
-    LIBCLANG_PATH: /usr/lib/sdk/llvm18/lib
+    LIBCLANG_PATH: /usr/lib/sdk/llvm20/lib
     BINDGEN_EXTRA_CLANG_ARGS: >-
-      -I/usr/lib/sdk/llvm18/include
+      -I/usr/lib/sdk/llvm20/include
       -I/usr/include
 
 modules:
@@ -43,12 +52,12 @@ modules:
     buildsystem: simple
 
     build-options:
-      append-path: /usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/llvm18/bin
+      append-path: /usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/llvm20/bin
       env:
         CARGO_HOME: /run/build/cargo-home
-        LIBCLANG_PATH: /usr/lib/sdk/llvm18/lib
+        LIBCLANG_PATH: /usr/lib/sdk/llvm20/lib
         BINDGEN_EXTRA_CLANG_ARGS: >-
-          -I/usr/lib/sdk/llvm18/include
+          -I/usr/lib/sdk/llvm20/include
           -I/usr/include
 
     build-commands:
@@ -101,7 +110,7 @@ modules:
 
       # Crates Cargo vendorisés (OBLIGATOIRE pour build offline/Flathub)
       # Générer avec :
-      #   pip install flatpak-cargo-generator
+      #   uv tool install flatpak-cargo-generator
       #   flatpak-cargo-generator Cargo.lock -o cargo-sources.json
       - cargo-sources.json
 
@@ -111,13 +120,13 @@ modules:
 #
 # 1. Installer les dépendances flatpak :
 #    flatpak install flathub \
-#      org.freedesktop.Platform//24.08 \
-#      org.freedesktop.Sdk//24.08 \
-#      org.freedesktop.Sdk.Extension.rust-stable//24.08 \
-#      org.freedesktop.Sdk.Extension.llvm18//24.08
+#      org.freedesktop.Platform//25.08 \
+#      org.freedesktop.Sdk//25.08 \
+#      org.freedesktop.Sdk.Extension.rust-stable//25.08 \
+#      org.freedesktop.Sdk.Extension.llvm20//25.08
 #
 # 2. Générer cargo-sources.json (une seule fois, ou après mise à jour Cargo.lock) :
-#    pip install flatpak-cargo-generator
+#    uv tool install flatpak-cargo-generator
 #    flatpak-cargo-generator Cargo.lock -o cargo-sources.json
 #
 # 3. Build local (test) :

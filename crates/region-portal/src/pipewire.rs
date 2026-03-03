@@ -300,7 +300,53 @@ mod tests {
     }
 }
 
-/// Run the PipeWire main loop with portal fd (must run on its own thread).
+/// Construit un pod SPA `EnumFormat` annonçant uniquement video/raw BGRx/BGRA
+/// **sans** la propriété modifier. L'absence du modifier signal à PipeWire/au
+/// compositeur que ce consumer ne supporte pas le DMA-BUF avec tiling → il
+/// retombe sur SHM (memfd linear). C'est la méthode fiable dans Flatpak où le
+/// Mesa sandboxé ne peut pas importer les buffers GPU tuilés (AMD GFX10, etc.).
+fn build_shm_format_pod(buf: &mut Vec<u8>) -> bool {
+    use libspa::pod::{Object, Property, PropertyFlags, Value, ChoiceValue};
+    use libspa::utils::{Choice, ChoiceEnum, ChoiceFlags, Id, SpaTypes};
+    use libspa::param::format::{FormatProperties, MediaType, MediaSubtype};
+    use libspa::param::video::VideoFormat;
+    use libspa::param::ParamType;
+    use libspa::pod::serialize::PodSerializer;
+
+    let obj = Object {
+        type_: SpaTypes::ObjectParamFormat.as_raw(),
+        id: ParamType::EnumFormat.as_raw() as u32,
+        properties: vec![
+            Property {
+                key: FormatProperties::MediaType.as_raw() as u32,
+                flags: PropertyFlags::empty(),
+                value: Value::Id(Id(MediaType::Video.as_raw() as u32)),
+            },
+            Property {
+                key: FormatProperties::MediaSubtype.as_raw() as u32,
+                flags: PropertyFlags::empty(),
+                value: Value::Id(Id(MediaSubtype::Raw.as_raw() as u32)),
+            },
+            Property {
+                key: FormatProperties::VideoFormat.as_raw() as u32,
+                flags: PropertyFlags::empty(),
+                // Enum{ default=BGRx, alt=[BGRA] }
+                value: Value::Choice(ChoiceValue::Id(Choice(
+                    ChoiceFlags::empty(),
+                    ChoiceEnum::Enum {
+                        default: Id(VideoFormat::BGRx.as_raw() as u32),
+                        alternatives: vec![Id(VideoFormat::BGRA.as_raw() as u32)],
+                    },
+                ))),
+            },
+            // PAS de propriété modifier → pas de DMA-BUF, PipeWire utilisera SHM
+        ],
+    };
+
+    let mut cursor = std::io::Cursor::new(&mut *buf);
+    PodSerializer::serialize(&mut cursor, &Value::Object(obj)).is_ok()
+}
+
 fn run_pipewire_loop_with_fd(
     node_id: u32,
     pipewire_fd: i32,
@@ -312,7 +358,7 @@ fn run_pipewire_loop_with_fd(
     use std::os::fd::FromRawFd;
     use std::cell::RefCell;
     use std::rc::Rc;
-    use crate::dmabuf_import::DmaBufImporter;
+    use crate::dmabuf_import::{DmaBufImporter, MODIFIER_UNKNOWN};
     use libspa::buffer::DataType;
     
     // Initialize PipeWire
@@ -321,9 +367,20 @@ fn run_pipewire_loop_with_fd(
     // DmaBuf importer will be created lazily in the process callback thread
     // This is important because EGL contexts are thread-local
     let dmabuf_importer: Rc<RefCell<Option<DmaBufImporter>>> = Rc::new(RefCell::new(None));
+
+    // Modifier DRM négocié par PipeWire via param_changed (SPA_FORMAT_VIDEO_modifier).
+    // Initialisé à MODIFIER_UNKNOWN ; mis à jour dès que le format est fixé par le portal.
+    // Partagé entre le callback param_changed et le callback process.
+    let modifier_store: Rc<std::cell::Cell<u64>> = Rc::new(std::cell::Cell::new(MODIFIER_UNKNOWN));
+
+    // DRM fourcc négocié via SPA_FORMAT_VIDEO_format dans param_changed.
+    // Par défaut DRM_FORMAT_XRGB8888 (le format le plus courant pour la capture écran).
+    // Convention DRM (LE) : XRGB8888 = mémoire [B,G,R,X] = SPA BGRx
+    //                       ARGB8888 = mémoire [B,G,R,A] = SPA BGRA
+    let fourcc_store: Rc<std::cell::Cell<u32>> = Rc::new(std::cell::Cell::new(0x34325258u32));
     
-    let mainloop = pw::main_loop::MainLoop::new(None)?;
-    let context = pw::context::Context::new(&mainloop)?;
+    let mainloop = pw::main_loop::MainLoopBox::new(None)?;
+    let context = pw::context::ContextBox::new(&mainloop.loop_(), None)?;
     
     // Connect using the portal's fd if provided, otherwise connect normally
     let core = if pipewire_fd >= 0 {
@@ -337,7 +394,7 @@ fn run_pipewire_loop_with_fd(
     };
     
     // Create stream
-    let stream = pw::stream::Stream::new(
+    let stream = pw::stream::StreamBox::new(
         &core,
         "region-to-share",
         pw::properties::properties! {
@@ -373,13 +430,69 @@ fn run_pipewire_loop_with_fd(
             state_clone.store(new_state, Ordering::Relaxed);
             let _ = stream; // Silence unused warning
         })
-        .param_changed(move |_stream, _, id, pod| {
-            trace!("PipeWire param_changed: id={}, has_pod={}", id, pod.is_some());
+        .param_changed({
+            let modifier_store = modifier_store.clone();
+            let fourcc_store = fourcc_store.clone();
+            move |_stream, _, id, pod| {
+                trace!("PipeWire param_changed: id={}, has_pod={}", id, pod.is_some());
+
+                // SPA_PARAM_Format = 4  (spa/param/param.h)
+                // SPA_FORMAT_VIDEO_format   = 0x20001 (VIDEO_BASE + 1)
+                // SPA_FORMAT_VIDEO_modifier = 0x20002 (VIDEO_BASE + 2)
+                const SPA_PARAM_FORMAT: u32 = 4;
+                const SPA_FORMAT_VIDEO_FORMAT: u32 = 0x20001;
+                const SPA_FORMAT_VIDEO_MODIFIER: u32 = 0x20002;
+
+                if id != SPA_PARAM_FORMAT { return; }
+                let Some(pod) = pod else { return; };
+
+                // API libspa 0.9 : pod.as_object() → PodObject::find_prop(Id) → PodProp::value() → Pod::get_*
+                use libspa::utils::Id;
+                if let Ok(obj) = pod.as_object() {
+                    // ── Video format → DRM fourcc ──────────────────────────────
+                    // Le format SPA est un Id (enum). On fait la correspondance
+                    // SPA VideoFormat → DRM fourcc (convention LE inversée).
+                    if let Some(prop) = obj.find_prop(Id(SPA_FORMAT_VIDEO_FORMAT)) {
+                        if let Ok(id_val) = prop.value().get_id() {
+                            use libspa::param::video::VideoFormat;
+                            let fourcc = match VideoFormat(id_val.0) {
+                                VideoFormat::BGRx => 0x34325258u32, // DRM_FORMAT_XRGB8888
+                                VideoFormat::BGRA => 0x34325241u32, // DRM_FORMAT_ARGB8888
+                                VideoFormat::RGBx => 0x34324258u32, // DRM_FORMAT_XBGR8888
+                                VideoFormat::RGBA => 0x34324241u32, // DRM_FORMAT_ABGR8888
+                                VideoFormat::xRGB => 0x58524742u32, // DRM_FORMAT_BGRX8888
+                                VideoFormat::ARGB => 0x41524742u32, // DRM_FORMAT_BGRA8888
+                                VideoFormat::xBGR => 0x58424752u32, // DRM_FORMAT_RGBX8888
+                                VideoFormat::ABGR => 0x41424752u32, // DRM_FORMAT_RGBA8888
+                                other => {
+                                    debug!("PipeWire: format SPA inconnu {:?}, fourcc inchangé", other);
+                                    fourcc_store.get() // conserver valeur précédente
+                                }
+                            };
+                            fourcc_store.set(fourcc);
+                            debug!("PipeWire: format SPA={:?} → DRM fourcc=0x{:08x}",
+                                VideoFormat(id_val.0), fourcc);
+                        }
+                    }
+                    // ── Modifier ──────────────────────────────────────────────
+                    if let Some(prop) = obj.find_prop(Id(SPA_FORMAT_VIDEO_MODIFIER)) {
+                        if let Ok(m) = prop.value().get_long() {
+                            let modifier = m as u64;
+                            modifier_store.set(modifier);
+                            debug!("PipeWire: DRM modifier négocié = 0x{:016x}", modifier);
+                        }
+                    }
+                }
+            }
         })
-        // Clone importer for process callback
+        // Clone importer + modifier_store for process callback
         .process({
             let dmabuf_importer_clone = dmabuf_importer.clone();
-            move |stream, _| {
+            let modifier_store_clone = modifier_store.clone();
+            let fourcc_store_clone = fourcc_store.clone();
+            move |stream, _| {            
+            let current_modifier = modifier_store_clone.get();
+            let current_fourcc = fourcc_store_clone.get();
             trace!("PipeWire process callback, state: {:?}", stream.state());
             
             if let Some(mut buffer) = stream.dequeue_buffer() {
@@ -451,10 +564,10 @@ fn run_pipewire_loop_with_fd(
                                     }
                                     
                                     if let Some(ref importer) = *importer_guard {
-                                        // DRM_FORMAT_ARGB8888 = 0x34325241
-                                        let fourcc = 0x34325241u32;
+                                        // Fourcc négocié depuis param_changed (plus de hardcode)
+                                        let fourcc = current_fourcc;
                                         
-                                        trace!("PipeWire: Importing DmaBuf fd={} {}x{}", fd, width, height);
+                                        trace!("PipeWire: Importing DmaBuf fd={} {}x{} fourcc=0x{:08x}", fd, width, height, fourcc);
                                         match importer.import_dmabuf(
                                             fd as i32,
                                             width,
@@ -462,6 +575,7 @@ fn run_pipewire_loop_with_fd(
                                             stride as u32,
                                             offset as u32,
                                             fourcc,
+                                            current_modifier,
                                         ) {
                                             Ok(pixels) => {
                                                 trace!("PipeWire: DmaBuf import success, {} bytes", pixels.len());
@@ -469,7 +583,39 @@ fn run_pipewire_loop_with_fd(
                                             }
                                             Err(e) => {
                                                 error!("DmaBuf import failed: {}", e);
-                                                None
+                                                // Fallback: mmap le fd DmaBuf directement
+                                                if maxsize > 0 {
+                                                    trace!("PipeWire: Trying mmap fallback for DmaBuf fd={}", fd);
+                                                    let map_size = maxsize as usize;
+                                                    let map_offset = mapoffset as i64;
+                                                    match unsafe {
+                                                        libc::mmap(
+                                                            std::ptr::null_mut(),
+                                                            map_size,
+                                                            libc::PROT_READ,
+                                                            libc::MAP_SHARED,
+                                                            fd as i32,
+                                                            map_offset,
+                                                        )
+                                                    } {
+                                                        ptr if ptr != libc::MAP_FAILED => {
+                                                            let actual = data_size.min(map_size.saturating_sub(offset));
+                                                            let slice = unsafe {
+                                                                std::slice::from_raw_parts(
+                                                                    (ptr as *const u8).add(offset),
+                                                                    actual,
+                                                                )
+                                                            };
+                                                            let result = slice.to_vec();
+                                                            unsafe { libc::munmap(ptr, map_size); }
+                                                            debug!("PipeWire: DmaBuf mmap fallback success, {} bytes", result.len());
+                                                            Some((result, false)) // mmap gives BGRA
+                                                        }
+                                                        _ => None,
+                                                    }
+                                                } else {
+                                                    None
+                                                }
                                             }
                                         }
                                     } else {
@@ -545,19 +691,40 @@ fn run_pipewire_loop_with_fd(
         }})
         .register()?;
     
-    // Connect to the node without specific format params (let PipeWire negotiate)
-    // For Portal streams, the format is already determined by the portal
-    // NOTE: RT_PROCESS is required to dequeue buffers in the process callback
-    // NOTE: ALLOC_BUFFERS makes PipeWire allocate buffers for us (non-DmaBuf)
+    // Construire un pod EnumFormat SHM-only (sans propriété modifier).
+    // L'absence du modifier signal que ce consumer ne gère pas le DMA-BUF tuilé
+    // → PipeWire/le compositeur tombera sur SHM (memfd linéaire), qui fonctionne
+    // de façon fiable dans le sandbox Flatpak.
+    let mut fmt_buf: Vec<u8> = Vec::with_capacity(512);
+    let pod_ok = build_shm_format_pod(&mut fmt_buf);
+    let mut params: Vec<&pw::spa::pod::Pod> = if pod_ok {
+        match libspa::pod::Pod::from_bytes(&fmt_buf) {
+            Some(pod) => {
+                debug!("PipeWire: connexion avec pod SHM-only ({} bytes)", fmt_buf.len());
+                vec![pod]
+            }
+            None => {
+                debug!("PipeWire: pod SHM invalide, connexion sans params");
+                vec![]
+            }
+        }
+    } else {
+        debug!("PipeWire: build pod SHM échoué, connexion sans params");
+        vec![]
+    };
+
+    // RT_PROCESS : dequeue buffers dans le process callback
+    // MAP_BUFFERS : mapper automatiquement les buffers mémoire (MemFd/SHM)
+    // Pas ALLOC_BUFFERS : en mode Portal le compositeur (producteur) alloue.
     stream.connect(
         pw::spa::utils::Direction::Input,
         Some(node_id),
-        pw::stream::StreamFlags::AUTOCONNECT 
-            | pw::stream::StreamFlags::MAP_BUFFERS 
-            | pw::stream::StreamFlags::RT_PROCESS
-            | pw::stream::StreamFlags::ALLOC_BUFFERS,
-        &mut [],  // Empty params = accept any format from portal
+        pw::stream::StreamFlags::AUTOCONNECT
+            | pw::stream::StreamFlags::MAP_BUFFERS
+            | pw::stream::StreamFlags::RT_PROCESS,
+        &mut params,
     )?;
+    debug!("PipeWire: stream connecté (SHM-only format pod)");
     
     // Run main loop - this will block and process events/frames
     mainloop.run();

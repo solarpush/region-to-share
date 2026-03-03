@@ -854,7 +854,7 @@ impl eframe::App for RegionApp {
                     if !self.show_streaming_options {
                         if let Some(hover_pos) = ctx.input(|i| i.pointer.hover_pos()) {
                             let over_button = gear_rect.contains(hover_pos)
-                                || (!Self::is_wayland() && bg_rect.contains(hover_pos));
+                                || bg_rect.contains(hover_pos);
                             if !over_button {
                                 ctx.set_cursor_icon(egui::CursorIcon::Move);
                             }
@@ -864,7 +864,7 @@ impl eframe::App for RegionApp {
                     if drag_response.drag_started() {
                         if let Some(pos) = ctx.input(|i| i.pointer.press_origin()) {
                             let over_button = gear_rect.contains(pos)
-                                || (!Self::is_wayland() && bg_rect.contains(pos));
+                                || bg_rect.contains(pos);
                             if !over_button {
                                 ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
                             }
@@ -872,8 +872,8 @@ impl eframe::App for RegionApp {
                     }
 
                     // Boutons en haut à droite (options + arrière-plan)
-                    // Bouton arrière-plan (↓) - seulement sur X11
-                    if !Self::is_wayland() {
+                    // Bouton arrière-plan : ↓ passe en arrière-plan (X11) ou réduit (Wayland)
+                    {
                         let bg_button_pos = egui::pos2(
                             ui.max_rect().right() - button_size.x * 2.0 - spacing * 2.0 - 5.0,
                             ui.max_rect().top() + 5.0
@@ -900,7 +900,11 @@ impl eframe::App for RegionApp {
                             ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
                         }
                         if bg_response.clicked() {
-                            Self::lower_window_x11();
+                            if Self::is_wayland() {
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                            } else {
+                                Self::lower_window_x11();
+                            }
                         }
                     }
                     
@@ -971,9 +975,12 @@ impl eframe::App for RegionApp {
                         ui.horizontal(|ui| {
                             ui.label(t!("settings.framerate"));
                             let mut frame_rate = self.config.settings.frame_rate as i32;
-                            if ui.add(egui::Slider::new(&mut frame_rate, 15..=120).suffix(" FPS (60 max on wayland)")).changed() {
+                            if ui.add(egui::Slider::new(&mut frame_rate, 15..=120).suffix(" FPS")).changed() {
                                 self.config.set_frame_rate(frame_rate as u32);
                             }
+                        });
+                        ui.horizontal( |ui | {
+                            ui.label(egui::RichText::new("Max 60 Fps on Wayland").small());
                         });
                         
                         ui.checkbox(&mut self.config.settings.show_performance, t!("settings.show_performance_short"));
@@ -1074,7 +1081,9 @@ impl eframe::App for RegionApp {
                         self.config.set_frame_rate(frame_rate as u32);
                     }
                 });
-                
+                ui.horizontal( |ui | {
+                    ui.label(egui::RichText::new("Max 60 Fps on Wayland").small());
+                });
                 ui.add_space(5.0);
                 ui.label(t!("settings.window"));
                 ui.horizontal(|ui| {
