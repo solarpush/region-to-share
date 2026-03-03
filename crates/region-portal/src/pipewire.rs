@@ -52,7 +52,10 @@ impl PipeWireStream {
     /// Connect to a PipeWire node using the portal's file descriptor.
     pub async fn connect_with_fd(node_id: u32, pipewire_fd: i32) -> Result<Self> {
         let state = Arc::new(AtomicU64::new(1)); // Connecting
-        let (frame_tx, frame_rx) = channel::unbounded();  // crossbeam unbounded channel
+        // Canal borné à 2 frames : le thread PipeWire fait try_send et abandonne
+        // si plein. Sans ça, les frames (≈16 Mo chacune à 3840×1080) s'accumulent
+        // dans un canal illimité → ~1 Go de RAM au bout de quelques secondes.
+        let (frame_tx, frame_rx) = channel::bounded(2);
         let (stop_tx, mut stop_rx) = tokio_mpsc::unbounded_channel();
         
         let state_clone = state.clone();
@@ -682,7 +685,11 @@ fn run_pipewire_loop_with_fd(
                                     format,
                                     timestamp: Instant::now(),
                                 };
-                                let _ = frame_tx_clone.send(pw_frame);
+                                // try_send : si le canal est plein (consommateur lent),
+                                // on abandonne ce frame plutôt que d'accumuler en mémoire.
+                                // Le consommateur drainera de toute façon le canal complet
+                                // pour récupérer uniquement le dernier frame disponible.
+                                let _ = frame_tx_clone.try_send(pw_frame);
                             }
                         }
                     }
