@@ -368,44 +368,22 @@ fn run_pipewire_loop_with_fd(
 ) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
     use pipewire as pw;
     use std::os::fd::FromRawFd;
-    use std::cell::RefCell;
-    use std::rc::Rc;
-    use crate::dmabuf_import::{DmaBufImporter, MODIFIER_UNKNOWN};
-    use libspa::buffer::DataType;
-    
-    // Initialize PipeWire
+
     pw::init();
-    
-    // DmaBuf importer will be created lazily in the process callback thread
-    // This is important because EGL contexts are thread-local
-    let dmabuf_importer: Rc<RefCell<Option<DmaBufImporter>>> = Rc::new(RefCell::new(None));
 
-    // Modifier DRM négocié par PipeWire via param_changed (SPA_FORMAT_VIDEO_modifier).
-    // Initialisé à MODIFIER_UNKNOWN ; mis à jour dès que le format est fixé par le portal.
-    // Partagé entre le callback param_changed et le callback process.
-    let modifier_store: Rc<std::cell::Cell<u64>> = Rc::new(std::cell::Cell::new(MODIFIER_UNKNOWN));
-
-    // DRM fourcc négocié via SPA_FORMAT_VIDEO_format dans param_changed.
-    // Par défaut DRM_FORMAT_XRGB8888 (le format le plus courant pour la capture écran).
-    // Convention DRM (LE) : XRGB8888 = mémoire [B,G,R,X] = SPA BGRx
-    //                       ARGB8888 = mémoire [B,G,R,A] = SPA BGRA
-    let fourcc_store: Rc<std::cell::Cell<u32>> = Rc::new(std::cell::Cell::new(0x34325258u32));
-    
     let mainloop = pw::main_loop::MainLoopBox::new(None)?;
     let context = pw::context::ContextBox::new(&mainloop.loop_(), None)?;
-    
-    // Connect using the portal's fd if provided, otherwise connect normally
+
     let core = if pipewire_fd >= 0 {
         debug!("PipeWire: Connecting with portal fd {}", pipewire_fd);
-        // SAFETY: The fd comes from ashpd portal and is valid
+        // SAFETY: fd provient du portal ashpd, valide et owned par nous
         let owned_fd = unsafe { std::os::fd::OwnedFd::from_raw_fd(pipewire_fd) };
         context.connect_fd(owned_fd, None)?
     } else {
         debug!("PipeWire: Connecting without portal fd (local)");
         context.connect(None)?
     };
-    
-    // Create stream
+
     let stream = pw::stream::StreamBox::new(
         &core,
         "region-to-share",
@@ -415,295 +393,58 @@ fn run_pipewire_loop_with_fd(
             *pw::keys::MEDIA_ROLE => "Screen",
         },
     )?;
-    
+
     let state_clone = state.clone();
-    
-    // Stream listener for frame data
+
     let _listener = stream
         .add_local_listener_with_user_data(())
         .state_changed(move |stream, _, old, new| {
             debug!("PipeWire stream state: {:?} -> {:?}", old, new);
             let new_state = match new {
-                pw::stream::StreamState::Paused => {
-                    debug!("PipeWire: Stream PAUSED");
-                    2
-                },
-                pw::stream::StreamState::Streaming => {
-                    info!("PipeWire: Stream STREAMING");
-                    3
-                },
-                pw::stream::StreamState::Error(e) => {
-                    error!("PipeWire stream error: {}", e);
-                    4
-                },
+                pw::stream::StreamState::Paused    => { debug!("PipeWire: Stream PAUSED");    2 },
+                pw::stream::StreamState::Streaming => { info!("PipeWire: Stream STREAMING");  3 },
+                pw::stream::StreamState::Error(e)  => { error!("PipeWire stream error: {}", e); 4 },
                 _ => 1,
             };
             state_clone.store(new_state, Ordering::Relaxed);
-            let _ = stream; // Silence unused warning
+            let _ = stream;
         })
-        .param_changed({
-            let modifier_store = modifier_store.clone();
-            let fourcc_store = fourcc_store.clone();
-            move |_stream, _, id, pod| {
-                trace!("PipeWire param_changed: id={}, has_pod={}", id, pod.is_some());
+        .process(move |stream, _| {
+            trace!("PipeWire process callback");
 
-                // SPA_PARAM_Format = 4  (spa/param/param.h)
-                // SPA_FORMAT_VIDEO_format   = 0x20001 (VIDEO_BASE + 1)
-                // SPA_FORMAT_VIDEO_modifier = 0x20002 (VIDEO_BASE + 2)
-                const SPA_PARAM_FORMAT: u32 = 4;
-                const SPA_FORMAT_VIDEO_FORMAT: u32 = 0x20001;
-                const SPA_FORMAT_VIDEO_MODIFIER: u32 = 0x20002;
-
-                if id != SPA_PARAM_FORMAT { return; }
-                let Some(pod) = pod else { return; };
-
-                // API libspa 0.9 : pod.as_object() → PodObject::find_prop(Id) → PodProp::value() → Pod::get_*
-                use libspa::utils::Id;
-                if let Ok(obj) = pod.as_object() {
-                    // ── Video format → DRM fourcc ──────────────────────────────
-                    // Le format SPA est un Id (enum). On fait la correspondance
-                    // SPA VideoFormat → DRM fourcc (convention LE inversée).
-                    if let Some(prop) = obj.find_prop(Id(SPA_FORMAT_VIDEO_FORMAT)) {
-                        if let Ok(id_val) = prop.value().get_id() {
-                            use libspa::param::video::VideoFormat;
-                            let fourcc = match VideoFormat(id_val.0) {
-                                VideoFormat::BGRx => 0x34325258u32, // DRM_FORMAT_XRGB8888
-                                VideoFormat::BGRA => 0x34325241u32, // DRM_FORMAT_ARGB8888
-                                VideoFormat::RGBx => 0x34324258u32, // DRM_FORMAT_XBGR8888
-                                VideoFormat::RGBA => 0x34324241u32, // DRM_FORMAT_ABGR8888
-                                VideoFormat::xRGB => 0x58524742u32, // DRM_FORMAT_BGRX8888
-                                VideoFormat::ARGB => 0x41524742u32, // DRM_FORMAT_BGRA8888
-                                VideoFormat::xBGR => 0x58424752u32, // DRM_FORMAT_RGBX8888
-                                VideoFormat::ABGR => 0x41424752u32, // DRM_FORMAT_RGBA8888
-                                other => {
-                                    debug!("PipeWire: format SPA inconnu {:?}, fourcc inchangé", other);
-                                    fourcc_store.get() // conserver valeur précédente
-                                }
-                            };
-                            fourcc_store.set(fourcc);
-                            debug!("PipeWire: format SPA={:?} → DRM fourcc=0x{:08x}",
-                                VideoFormat(id_val.0), fourcc);
-                        }
-                    }
-                    // ── Modifier ──────────────────────────────────────────────
-                    if let Some(prop) = obj.find_prop(Id(SPA_FORMAT_VIDEO_MODIFIER)) {
-                        if let Ok(m) = prop.value().get_long() {
-                            let modifier = m as u64;
-                            modifier_store.set(modifier);
-                            debug!("PipeWire: DRM modifier négocié = 0x{:016x}", modifier);
-                        }
-                    }
-
-                }
-            }
-        })
-        .process({
-            let dmabuf_importer_clone = dmabuf_importer.clone();
-            let modifier_store_clone = modifier_store.clone();
-            let fourcc_store_clone = fourcc_store.clone();
-            move |stream, _| {            
-            let current_modifier = modifier_store_clone.get();
-            let current_fourcc = fourcc_store_clone.get();
-            trace!("PipeWire process callback, state: {:?}", stream.state());
-            
             if let Some(mut buffer) = stream.dequeue_buffer() {
                 let datas = buffer.datas_mut();
-                
-                if !datas.is_empty() {
-                    let data_ref = &mut datas[0];
-                    let data_type = data_ref.type_();
-                    
-                    // Get raw spa_data to access fd - copy values to avoid borrow issues
-                    let raw_data = data_ref.as_raw();
-                    let fd = raw_data.fd;
-                    let mapoffset = raw_data.mapoffset;
-                    let maxsize = raw_data.maxsize;
-                    
-                    trace!("PipeWire buffer: fd={}, maxsize={}, type={:?}", fd, maxsize, data_type);
-                    
-                    // Get chunk info for actual data size
-                    let chunk = data_ref.chunk();
-                    let data_size = chunk.size() as usize;
-                    let stride = chunk.stride() as usize;
-                    let offset = chunk.offset() as usize;
-                    
-                    trace!("PipeWire chunk: size={}, stride={}, offset={}", data_size, stride, offset);
-                    
-                    // Try to get data - method depends on buffer type
-                    // Returns (data, is_dmabuf) - DmaBuf gives RGBA, mmap gives BGRA
-                    let frame_data: Option<(Vec<u8>, bool)> = match data_ref.data() {
-                        Some(data) => {
-                            let actual_size = data_size.min(data.len());
-                            if actual_size > 0 {
-                                trace!("PipeWire: Direct data {} bytes", actual_size);
-                                Some((data[offset..offset + actual_size].to_vec(), false))
-                            } else {
-                                None
-                            }
-                        }
-                        None => {
-                            // Check if this is a DmaBuf
-                            if data_type == DataType::DmaBuf {
-                                trace!("PipeWire: DmaBuf detected, using EGL import");
-                                // Calculate dimensions from stride
-                                let bpp = 4; // BGRA/ARGB
-                                let width = if stride > 0 { (stride / bpp) as u32 } else { 0 };
-                                let height = if stride > 0 && data_size > 0 { 
-                                    (data_size / stride) as u32 
-                                } else { 
-                                    0 
-                                };
-                                
-                                trace!("PipeWire: DmaBuf dimensions {}x{}", width, height);
-                                
-                                if fd >= 0 && width > 0 && height > 0 {
-                                    // Get or create the DmaBuf importer
-                                    let mut importer_guard = dmabuf_importer_clone.borrow_mut();
-                                    
-                                    // Initialize importer if not yet done
-                                    if importer_guard.is_none() {
-                                        debug!("PipeWire: Creating DmaBufImporter");
-                                        match DmaBufImporter::new() {
-                                            Ok(imp) => {
-                                                debug!("PipeWire: DmaBufImporter created successfully");
-                                                *importer_guard = Some(imp);
-                                            }
-                                            Err(e) => {
-                                                error!("Failed to create DmaBufImporter: {}", e);
-                                            }
-                                        }
-                                    }
-                                    
-                                    if let Some(ref importer) = *importer_guard {
-                                        // Fourcc négocié depuis param_changed (plus de hardcode)
-                                        let fourcc = current_fourcc;
-                                        
-                                        trace!("PipeWire: Importing DmaBuf fd={} {}x{} fourcc=0x{:08x}", fd, width, height, fourcc);
-                                        match importer.import_dmabuf(
-                                            fd as i32,
-                                            width,
-                                            height,
-                                            stride as u32,
-                                            offset as u32,
-                                            fourcc,
-                                            current_modifier,
-                                        ) {
-                                            Ok(pixels) => {
-                                                trace!("PipeWire: DmaBuf import success, {} bytes", pixels.len());
-                                                Some((pixels, true)) // DmaBuf gives RGBA
-                                            }
-                                            Err(e) => {
-                                                error!("DmaBuf import failed: {}", e);
-                                                // Fallback: mmap le fd DmaBuf directement
-                                                if maxsize > 0 {
-                                                    trace!("PipeWire: Trying mmap fallback for DmaBuf fd={}", fd);
-                                                    let map_size = maxsize as usize;
-                                                    let map_offset = mapoffset as i64;
-                                                    match unsafe {
-                                                        libc::mmap(
-                                                            std::ptr::null_mut(),
-                                                            map_size,
-                                                            libc::PROT_READ,
-                                                            libc::MAP_SHARED,
-                                                            fd as i32,
-                                                            map_offset,
-                                                        )
-                                                    } {
-                                                        ptr if ptr != libc::MAP_FAILED => {
-                                                            let actual = data_size.min(map_size.saturating_sub(offset));
-                                                            let slice = unsafe {
-                                                                std::slice::from_raw_parts(
-                                                                    (ptr as *const u8).add(offset),
-                                                                    actual,
-                                                                )
-                                                            };
-                                                            let result = slice.to_vec();
-                                                            unsafe { libc::munmap(ptr, map_size); }
-                                                            debug!("PipeWire: DmaBuf mmap fallback success, {} bytes", result.len());
-                                                            Some((result, false)) // mmap gives BGRA
-                                                        }
-                                                        _ => None,
-                                                    }
-                                                } else {
-                                                    None
-                                                }
-                                            }
-                                        }
-                                    } else {
-                                        None
-                                    }
-                                } else {
-                                    None
-                                }
-                            } else if fd >= 0 && maxsize > 0 {
-                                // MemFd or other - try mmap
-                                trace!("PipeWire: Trying mmap for fd={}", fd);
-                                let map_size = maxsize as usize;
-                                let map_offset = mapoffset as i64;
-                                
-                                match unsafe {
-                                    libc::mmap(
-                                        std::ptr::null_mut(),
-                                        map_size,
-                                        libc::PROT_READ,
-                                        libc::MAP_SHARED,
-                                        fd as i32,
-                                        map_offset,
-                                    )
-                                } {
-                                    ptr if ptr != libc::MAP_FAILED => {
-                                        let slice = unsafe { 
-                                            std::slice::from_raw_parts(
-                                                (ptr as *const u8).add(offset), 
-                                                data_size.min(map_size - offset)
-                                            ) 
-                                        };
-                                        let result = slice.to_vec();
-                                        unsafe { libc::munmap(ptr, map_size); }
-                                        Some((result, false)) // mmap gives BGRA
-                                    }
-                                    _ => {
-                                        None
-                                    }
-                                }
-                            } else {
-                                None
-                            }
-                        }
+                if datas.is_empty() { return; }
+
+                let data_ref = &mut datas[0];
+                let chunk    = data_ref.chunk();
+                let stride   = chunk.stride() as usize;
+                let data_size = chunk.size() as usize;
+                let offset   = chunk.offset() as usize;
+
+                // MAP_BUFFERS garantit que data() est toujours Some pour SHM/MemFd.
+                if let Some(data) = data_ref.data() {
+                    let actual = data_size.min(data.len().saturating_sub(offset));
+                    if stride == 0 || actual == 0 { return; }
+
+                    let bpp    = 4usize;
+                    let width  = (stride / bpp) as u32;
+                    let height = (actual / stride) as u32;
+                    if width == 0 || height == 0 { return; }
+
+                    let pw_frame = PipeWireFrame {
+                        width,
+                        height,
+                        data: Arc::new(data[offset..offset + actual].to_vec()),
+                        format: PixelFormat::BGRA8888,
+                        timestamp: Instant::now(),
                     };
-                    
-                    if let Some((data, is_dmabuf)) = frame_data {
-                        if stride > 0 && !data.is_empty() {
-                            let bpp = 4;
-                            let width = (stride / bpp) as u32;
-                            let height = (data.len() / stride) as u32;
-                            
-                            // DmaBuf gives RGBA, mmap gives BGRA
-                            let format = if is_dmabuf {
-                                PixelFormat::RGBA8888
-                            } else {
-                                PixelFormat::BGRA8888
-                            };
-                            
-                            if width > 0 && height > 0 {
-                                let pw_frame = PipeWireFrame {
-                                    width,
-                                    height,
-                                    data: Arc::new(data),
-                                    format,
-                                    timestamp: Instant::now(),
-                                };
-                                // try_send : si le canal est plein (consommateur lent),
-                                // on abandonne ce frame plutôt que d'accumuler en mémoire.
-                                // Le consommateur drainera de toute façon le canal complet
-                                // pour récupérer uniquement le dernier frame disponible.
-                                let _ = frame_tx.try_send(pw_frame);
-                            }
-                        }
-                    }
+                    // try_send : si le canal est plein (consommateur lent),
+                    // on abandonne ce frame plutôt que d'accumuler en mémoire.
+                    let _ = frame_tx.try_send(pw_frame);
                 }
             }
-        }})
+        })
         .register()?;
     
     // Construire un pod EnumFormat SHM-only (sans propriété modifier).
