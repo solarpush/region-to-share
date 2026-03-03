@@ -44,18 +44,14 @@ pub struct PipeWireStream {
 }
 
 impl PipeWireStream {
-    /// Connect to a PipeWire node (without portal fd - deprecated).
-    pub async fn connect(node_id: u32) -> Result<Self> {
-        Self::connect_with_fd(node_id, -1).await
-    }
-    
     /// Connect to a PipeWire node using the portal's file descriptor.
     pub async fn connect_with_fd(node_id: u32, pipewire_fd: i32) -> Result<Self> {
         let state = Arc::new(AtomicU64::new(1)); // Connecting
-        // Canal borné à 2 frames : le thread PipeWire fait try_send et abandonne
+        // Canal borné à 4 frames : le thread PipeWire fait try_send et abandonne
         // si plein. Sans ça, les frames (≈16 Mo chacune à 3840×1080) s'accumulent
         // dans un canal illimité → ~1 Go de RAM au bout de quelques secondes.
-        let (frame_tx, frame_rx) = channel::bounded(2);
+        // 4 frames ≈ 64 Mo max en tampon, marge suffisante pour absorber un pic.
+        let (frame_tx, frame_rx) = channel::bounded(4);
         let (stop_tx, mut stop_rx) = tokio_mpsc::unbounded_channel();
         
         let state_clone = state.clone();
@@ -113,16 +109,23 @@ impl PipeWireStream {
             latest_frame = Some(frame);
         }
         
-        // If no frame yet, wait a bit for one to arrive (up to 2 seconds)
+        // If no frame yet, wait a bit for one to arrive (up to 2 seconds).
+        // On utilise spawn_blocking pour ne pas bloquer le thread tokio avec
+        // recv_timeout (appel synchrone crossbeam) → évite le plafond de fps
+        // causé par la monopolisation du runtime async.
         if latest_frame.is_none() {
+            let rx = self.frame_rx.clone();
             let timeout = std::time::Duration::from_secs(2);
-            match self.frame_rx.recv_timeout(timeout) {
-                Ok(frame) => latest_frame = Some(frame),
-                Err(channel::RecvTimeoutError::Timeout) => {
+            match tokio::task::spawn_blocking(move || rx.recv_timeout(timeout)).await {
+                Ok(Ok(frame)) => latest_frame = Some(frame),
+                Ok(Err(channel::RecvTimeoutError::Timeout)) => {
                     return Err(CaptureError::CaptureFailed("Timeout waiting for frame".to_string()));
                 }
-                Err(channel::RecvTimeoutError::Disconnected) => {
+                Ok(Err(channel::RecvTimeoutError::Disconnected)) => {
                     return Err(CaptureError::CaptureFailed("Stream closed".to_string()));
+                }
+                Err(_join_err) => {
+                    return Err(CaptureError::CaptureFailed("spawn_blocking panicked".to_string()));
                 }
             }
         }
@@ -188,9 +191,11 @@ impl PipeWireStream {
             latest = Some(frame);
         }
         if latest.is_none() {
-            // Attend un frame jusqu'à 1 seconde
+            // Attend un frame jusqu'à 1 seconde (spawn_blocking pour ne pas
+            // bloquer le thread tokio avec recv_timeout synchrone).
+            let rx = self.frame_rx.clone();
             let timeout = std::time::Duration::from_secs(1);
-            if let Ok(frame) = self.frame_rx.recv_timeout(timeout) {
+            if let Ok(Ok(frame)) = tokio::task::spawn_blocking(move || rx.recv_timeout(timeout)).await {
                 latest = Some(frame);
             }
         }
@@ -305,9 +310,10 @@ mod tests {
 
 /// Construit un pod SPA `EnumFormat` annonçant uniquement video/raw BGRx/BGRA
 /// **sans** la propriété modifier. L'absence du modifier signal à PipeWire/au
-/// compositeur que ce consumer ne supporte pas le DMA-BUF avec tiling → il
-/// retombe sur SHM (memfd linear). C'est la méthode fiable dans Flatpak où le
-/// Mesa sandboxé ne peut pas importer les buffers GPU tuilés (AMD GFX10, etc.).
+/// compositeur que ce consumer ne supporte pas le DMA-BUF avec tiling → retombe
+/// sur SHM (memfd linear). Fiable dans Flatpak où Mesa sandboxé ne peut pas
+/// importer les buffers GPU tuilés. Le framerate est fixé par le Portal
+/// Screencast lui-même — l'ajouter ici crée un conflit ("no more input formats").
 fn build_shm_format_pod(buf: &mut Vec<u8>) -> bool {
     use libspa::pod::{Object, Property, PropertyFlags, Value, ChoiceValue};
     use libspa::utils::{Choice, ChoiceEnum, ChoiceFlags, Id, SpaTypes};
@@ -342,7 +348,10 @@ fn build_shm_format_pod(buf: &mut Vec<u8>) -> bool {
                     },
                 ))),
             },
-            // PAS de propriété modifier → pas de DMA-BUF, PipeWire utilisera SHM
+            // PAS de propriété modifier → pas de DMA-BUF, PipeWire utilisera SHM.
+            // PAS de VideoFramerate : le Portal Screencast fixe lui-même le framerate
+            // dans le graphe PipeWire ; l'ajouter ici crée un conflit de format
+            // ("no more input formats") avec Mutter/GNOME.
         ],
     };
 
@@ -407,7 +416,6 @@ fn run_pipewire_loop_with_fd(
         },
     )?;
     
-    let frame_tx_clone = frame_tx.clone();
     let state_clone = state.clone();
     
     // Stream listener for frame data
@@ -485,10 +493,10 @@ fn run_pipewire_loop_with_fd(
                             debug!("PipeWire: DRM modifier négocié = 0x{:016x}", modifier);
                         }
                     }
+
                 }
             }
         })
-        // Clone importer + modifier_store for process callback
         .process({
             let dmabuf_importer_clone = dmabuf_importer.clone();
             let modifier_store_clone = modifier_store.clone();
@@ -689,7 +697,7 @@ fn run_pipewire_loop_with_fd(
                                 // on abandonne ce frame plutôt que d'accumuler en mémoire.
                                 // Le consommateur drainera de toute façon le canal complet
                                 // pour récupérer uniquement le dernier frame disponible.
-                                let _ = frame_tx_clone.try_send(pw_frame);
+                                let _ = frame_tx.try_send(pw_frame);
                             }
                         }
                     }
