@@ -41,6 +41,11 @@ pub struct PipeWireStream {
     sequence: u64,
     stream_width: u32,
     stream_height: u32,
+    /// Frame mis en cache par probe_stream_size() afin que capture_frame()
+    /// puisse l'utiliser directement sans redemander un nouveau frame au
+    /// compositor. Essentiel sous Flatpak (SHM-only) où le compositor ne
+    /// repousse pas de frame tant que rien ne change à l'écran.
+    cached_frame: Option<PipeWireFrame>,
 }
 
 impl PipeWireStream {
@@ -91,6 +96,7 @@ impl PipeWireStream {
             sequence: 0,
             stream_width: 1920,
             stream_height: 1080,
+            cached_frame: None,
         })
     }
 
@@ -101,15 +107,22 @@ impl PipeWireStream {
             return Err(CaptureError::CaptureFailed("Stream not active".to_string()));
         }
 
-        // Try to get latest frame, with timeout for first frame
-        let mut latest_frame = None;
+        // Try to get latest frame, with timeout for first frame.
+        // On commence par vider le cache laissé par probe_stream_size() : sans
+        // ça, sous Flatpak (SHM-only), le canal est vide juste après le probe
+        // et on timeout en attendant un frame qui ne vient pas (le compositor
+        // ne repousse un frame que si l'écran change).
+        let mut latest_frame: Option<PipeWireFrame> = self.cached_frame.take();
+        if latest_frame.is_some() {
+            debug!("[PipeWire] capture_frame: using cached frame");
+        }
         
-        // First, drain any pending frames to get the latest (non-blocking)
+        // Draine ensuite le channel pour récupérer un frame plus récent si dispo
         while let Ok(frame) = self.frame_rx.try_recv() {
             latest_frame = Some(frame);
         }
         
-        // If no frame yet, wait a bit for one to arrive (up to 2 seconds).
+        // Si toujours rien, attend qu'un nouveau frame arrive (jusqu'à 2 s).
         // On utilise spawn_blocking pour ne pas bloquer le thread tokio avec
         // recv_timeout (appel synchrone crossbeam) → évite le plafond de fps
         // causé par la monopolisation du runtime async.
@@ -203,6 +216,10 @@ impl PipeWireStream {
             self.stream_width = frame.width;
             self.stream_height = frame.height;
             debug!("[PipeWire] probe_stream_size: {}x{}", frame.width, frame.height);
+            // Conserve le frame dans le cache plutôt que de le jeter.
+            // capture_frame() l'utilisera directement, ce qui évite d'attendre
+            // un nouveau push du compositor (critique sous Flatpak SHM-only).
+            self.cached_frame = Some(frame);
         }
         (self.stream_width, self.stream_height)
     }
@@ -308,12 +325,11 @@ mod tests {
     }
 }
 
-/// Construit un pod SPA `EnumFormat` annonçant uniquement video/raw BGRx/BGRA
-/// **sans** la propriété modifier. L'absence du modifier signal à PipeWire/au
-/// compositeur que ce consumer ne supporte pas le DMA-BUF avec tiling → retombe
-/// sur SHM (memfd linear). Fiable dans Flatpak où Mesa sandboxé ne peut pas
-/// importer les buffers GPU tuilés. Le framerate est fixé par le Portal
-/// Screencast lui-même — l'ajouter ici crée un conflit ("no more input formats").
+/// Construit un pod SPA `EnumFormat` BGRx/BGRA sans propriété modifier.
+/// L'absence du modifier signale que ce consumer ne supporte pas le DMA-BUF
+/// tuilé → le compositor/PipeWire tombe sur SHM (memfd linéaire).
+/// Obligatoire sous Flatpak : sans ce pod, Mutter négocie DMA-BUF par défaut,
+/// les fds DMA-BUF ne sont pas lisibles dans le sandbox → aucun frame reçu.
 fn build_shm_format_pod(buf: &mut Vec<u8>) -> bool {
     use libspa::pod::{Object, Property, PropertyFlags, Value, ChoiceValue};
     use libspa::utils::{Choice, ChoiceEnum, ChoiceFlags, Id, SpaTypes};
@@ -339,7 +355,6 @@ fn build_shm_format_pod(buf: &mut Vec<u8>) -> bool {
             Property {
                 key: FormatProperties::VideoFormat.as_raw() as u32,
                 flags: PropertyFlags::empty(),
-                // Enum{ default=BGRx, alt=[BGRA] }
                 value: Value::Choice(ChoiceValue::Id(Choice(
                     ChoiceFlags::empty(),
                     ChoiceEnum::Enum {
@@ -348,10 +363,8 @@ fn build_shm_format_pod(buf: &mut Vec<u8>) -> bool {
                     },
                 ))),
             },
-            // PAS de propriété modifier → pas de DMA-BUF, PipeWire utilisera SHM.
-            // PAS de VideoFramerate : le Portal Screencast fixe lui-même le framerate
-            // dans le graphe PipeWire ; l'ajouter ici crée un conflit de format
-            // ("no more input formats") avec Mutter/GNOME.
+            // PAS de propriété modifier → pas de DMA-BUF tuilé.
+            // PAS de VideoFramerate → le Portal Screencast le fixe lui-même.
         ],
     };
 
@@ -422,20 +435,62 @@ fn run_pipewire_loop_with_fd(
                 let data_size = chunk.size() as usize;
                 let offset   = chunk.offset() as usize;
 
-                // MAP_BUFFERS garantit que data() est toujours Some pour SHM/MemFd.
-                if let Some(data) = data_ref.data() {
+                // Essayer data() en premier (MAP_BUFFERS mappe SHM automatiquement).
+                // Sous Flatpak avec MemFd, data() peut retourner None si le mapping
+                // automatique échoue → fallback sur mmap manuel via le fd du buffer.
+                let frame_bytes: Option<Vec<u8>> = if let Some(data) = data_ref.data() {
                     let actual = data_size.min(data.len().saturating_sub(offset));
-                    if stride == 0 || actual == 0 { return; }
+                    if stride > 0 && actual > 0 {
+                        Some(data[offset..offset + actual].to_vec())
+                    } else {
+                        None
+                    }
+                } else {
+                    // data() == None : MAP_BUFFERS n'a pas mappé → mmap manuel.
+                    let raw       = data_ref.as_raw();
+                    let fd        = raw.fd as i32;
+                    let mapoffset = raw.mapoffset as i64;
+                    let maxsize   = raw.maxsize as usize;
+                    if fd >= 0 && maxsize > 0 {
+                        unsafe {
+                            let ptr = libc::mmap(
+                                std::ptr::null_mut(),
+                                maxsize,
+                                libc::PROT_READ,
+                                libc::MAP_SHARED,
+                                fd,
+                                mapoffset,
+                            );
+                            if ptr != libc::MAP_FAILED {
+                                let actual = data_size.min(maxsize.saturating_sub(offset));
+                                let slice = std::slice::from_raw_parts(
+                                    (ptr as *const u8).add(offset),
+                                    actual,
+                                );
+                                let result = slice.to_vec();
+                                libc::munmap(ptr, maxsize);
+                                debug!("[PipeWire] mmap fallback: {} bytes", result.len());
+                                Some(result)
+                            } else {
+                                None
+                            }
+                        }
+                    } else {
+                        None
+                    }
+                };
 
+                if let Some(data) = frame_bytes {
+                    if stride == 0 || data.is_empty() { return; }
                     let bpp    = 4usize;
                     let width  = (stride / bpp) as u32;
-                    let height = (actual / stride) as u32;
+                    let height = (data.len() / stride) as u32;
                     if width == 0 || height == 0 { return; }
 
                     let pw_frame = PipeWireFrame {
                         width,
                         height,
-                        data: Arc::new(data[offset..offset + actual].to_vec()),
+                        data: Arc::new(data),
                         format: PixelFormat::BGRA8888,
                         timestamp: Instant::now(),
                     };
@@ -447,40 +502,34 @@ fn run_pipewire_loop_with_fd(
         })
         .register()?;
     
-    // Construire un pod EnumFormat SHM-only (sans propriété modifier).
-    // L'absence du modifier signal que ce consumer ne gère pas le DMA-BUF tuilé
-    // → PipeWire/le compositeur tombera sur SHM (memfd linéaire), qui fonctionne
-    // de façon fiable dans le sandbox Flatpak.
-    let mut fmt_buf: Vec<u8> = Vec::with_capacity(512);
-    let pod_ok = build_shm_format_pod(&mut fmt_buf);
-    let mut params: Vec<&pw::spa::pod::Pod> = if pod_ok {
-        match libspa::pod::Pod::from_bytes(&fmt_buf) {
-            Some(pod) => {
-                debug!("PipeWire: connexion avec pod SHM-only ({} bytes)", fmt_buf.len());
-                vec![pod]
-            }
-            None => {
-                debug!("PipeWire: pod SHM invalide, connexion sans params");
-                vec![]
-            }
-        }
-    } else {
-        debug!("PipeWire: build pod SHM échoué, connexion sans params");
-        vec![]
-    };
-
-    // RT_PROCESS : dequeue buffers dans le process callback
-    // MAP_BUFFERS : mapper automatiquement les buffers mémoire (MemFd/SHM)
+    // RT_PROCESS  : dequeue buffers dans le process callback
+    // MAP_BUFFERS : mapper automatiquement les buffers mémoire (MemFd/SHM).
+    //               Si le mapping automatique échoue sous Flatpak (data()==None),
+    //               le process callback effectue un mmap manuel via le fd.
     // Pas ALLOC_BUFFERS : en mode Portal le compositeur (producteur) alloue.
+    //
+    // Le pod EnumFormat BGRx/BGRA sans propriété modifier est OBLIGATOIRE pour
+    // forcer SHM sous Flatpak. Sans ce pod, le compositor Wayland (Mutter/GNOME)
+    // négocie DMA-BUF par défaut ; dans le sandbox Flatpak, les fds DMA-BUF
+    // tuilés ne sont pas lisibles via data() ni via mmap → aucun frame reçu.
+    let mut fmt_buf: Vec<u8> = Vec::with_capacity(512);
+    let mut params_refs: Vec<&pw::spa::pod::Pod> = Vec::new();
+    if build_shm_format_pod(&mut fmt_buf) {
+        if let Some(pod) = libspa::pod::Pod::from_bytes(&fmt_buf) {
+            debug!("PipeWire: connexion avec pod SHM-only ({} bytes)", fmt_buf.len());
+            params_refs.push(pod);
+        }
+    }
+
     stream.connect(
         pw::spa::utils::Direction::Input,
         Some(node_id),
         pw::stream::StreamFlags::AUTOCONNECT
             | pw::stream::StreamFlags::MAP_BUFFERS
             | pw::stream::StreamFlags::RT_PROCESS,
-        &mut params,
+        &mut params_refs,
     )?;
-    debug!("PipeWire: stream connecté (SHM-only format pod)");
+    debug!("PipeWire: stream connecté");
     
     // Run main loop - this will block and process events/frames
     mainloop.run();

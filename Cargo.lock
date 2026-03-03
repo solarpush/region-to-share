@@ -3133,6 +3133,7 @@ dependencies = [
  "ashpd",
  "async-trait",
  "crossbeam-channel",
+ "libc",
  "libspa",
  "log",
  "pipewire",

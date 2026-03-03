@@ -77,18 +77,78 @@
 		https://github.com/solarpush/region-to-share
 	</url>
 	<screenshots>
-		<!-- Remplacer par des URLs d'images hébergées ou des chemins relatifs réels -->
-		<!-- Flathub recommande au moins une capture d'écran 1248×702 ou 752×423 -->
-		<!--
 		<screenshot type="default">
-		<caption>Region selection on a ultrawide screen</caption>
-		<image>https://raw.githubusercontent.com/solarpush/region-to-share/main/images/screenshot-selection.png</image>
+			<caption>
+				Region selection on an ultrawide screen
+			</caption>
+			<image>
+				https://raw.githubusercontent.com/solarpush/region-to-share/main/images/screenshots/screenshot-1.png
+			</image>
 		</screenshot>
 		<screenshot>
-		<caption>Sharing window in a video call</caption>
-		<image>https://raw.githubusercontent.com/solarpush/region-to-share/main/images/screenshot-sharing.png</image>
+			<caption>
+				Region to Share in action
+			</caption>
+			<image>
+				https://raw.githubusercontent.com/solarpush/region-to-share/main/images/screenshots/screenshot-2.png
+			</image>
 		</screenshot>
-		-->
+		<screenshot>
+			<caption>
+				Region to Share in action
+			</caption>
+			<image>
+				https://raw.githubusercontent.com/solarpush/region-to-share/main/images/screenshots/screenshot-3.png
+			</image>
+		</screenshot>
+		<screenshot>
+			<caption>
+				Region to Share in action
+			</caption>
+			<image>
+				https://raw.githubusercontent.com/solarpush/region-to-share/main/images/screenshots/screenshot-4.png
+			</image>
+		</screenshot>
+		<screenshot>
+			<caption>
+				Region to Share in action
+			</caption>
+			<image>
+				https://raw.githubusercontent.com/solarpush/region-to-share/main/images/screenshots/screenshot-5.png
+			</image>
+		</screenshot>
+		<screenshot>
+			<caption>
+				Region to Share in action
+			</caption>
+			<image>
+				https://raw.githubusercontent.com/solarpush/region-to-share/main/images/screenshots/screenshot-6.png
+			</image>
+		</screenshot>
+		<screenshot>
+			<caption>
+				Region to Share in action
+			</caption>
+			<image>
+				https://raw.githubusercontent.com/solarpush/region-to-share/main/images/screenshots/screenshot-7.png
+			</image>
+		</screenshot>
+		<screenshot>
+			<caption>
+				Region to Share in action
+			</caption>
+			<image>
+				https://raw.githubusercontent.com/solarpush/region-to-share/main/images/screenshots/screenshot-8.png
+			</image>
+		</screenshot>
+		<screenshot>
+			<caption>
+				Region to Share in action
+			</caption>
+			<image>
+				https://raw.githubusercontent.com/solarpush/region-to-share/main/images/screenshots/screenshot-9.png
+			</image>
+		</screenshot>
 	</screenshots>
 	<releases>
 		<release version="2.0.0-beta2" date="2025-10-01">

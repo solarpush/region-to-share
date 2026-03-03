@@ -372,22 +372,27 @@ impl RegionApp {
             let _ = new_tx.send(StatsUpdate::ScreenSize(screen_width, screen_height));
             
             // Capturer tout l'écran
-            if let Ok(frame) = backend.capture_screenshot().await {
-                if let Some(arc_buffer) = frame.data.as_arc_buffer() {
-                    let frame_data = FrameData {
-                        width: frame.width,
-                        height: frame.height,
-                        data: arc_buffer,
-                        format: frame.format,
-                    };
-                    let _ = new_tx.send(StatsUpdate::Screenshot(frame_data));
-                    
-                    // Stocker le backend pour réutilisation (évite un nouveau dialogue Portal)
-                    if use_wayland {
-                        *portal_backend_arc.lock().await = Some(backend);
+            match backend.capture_screenshot().await {
+                Err(e) => {
+                    log::error!("[UI] capture_screenshot failed: {:?}", e);
+                }
+                Ok(frame) => {
+                    if let Some(arc_buffer) = frame.data.as_arc_buffer() {
+                        let frame_data = FrameData {
+                            width: frame.width,
+                            height: frame.height,
+                            data: arc_buffer,
+                            format: frame.format,
+                        };
+                        let _ = new_tx.send(StatsUpdate::Screenshot(frame_data));
+                        
+                        // Stocker le backend pour réutilisation (évite un nouveau dialogue Portal)
+                        if use_wayland {
+                            *portal_backend_arc.lock().await = Some(backend);
+                        }
+                        
+                        ctx_clone.request_repaint();
                     }
-                    
-                    ctx_clone.request_repaint();
                 }
             }
         });
