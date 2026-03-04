@@ -22,12 +22,12 @@ tokio = { version = "1.40", features = ["full"] }
 async-trait = "0.1"
 
 # Portal/Wayland
-ashpd = { version = "0.9", features = ["pipewire"] }
-zbus = "4.0"
+ashpd = { version = "0.13", features = ["pipewire", "screencast"] }
+zbus = "5.0"
 
 # PipeWire
-pipewire = "0.8"
-libspa = "0.8"
+pipewire = "0.9"
+libspa = "0.9"
 
 # X11
 x11rb = { version = "0.13", features = ["shm", "xfixes", "render", "randr", "cursor"] }

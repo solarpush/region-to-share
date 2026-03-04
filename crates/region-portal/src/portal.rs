@@ -6,9 +6,13 @@
 //! - Wlroots-based (sway, hyprland, etc.)
 //! - Any compositor implementing xdg-desktop-portal
 
-use ashpd::desktop::screencast::{CursorMode, SourceType, Screencast};
-use ashpd::desktop::PersistMode;
-use ashpd::WindowIdentifier;
+use ashpd::desktop::screencast::{
+    CursorMode, OpenPipeWireRemoteOptions, Screencast, SelectSourcesOptions,
+    SourceType, StartCastOptions,
+};
+use ashpd::desktop::{PersistMode, CreateSessionOptions};
+use enumflags2::BitFlags;
+use ashpd::enumflags2;
 use log::{debug, info, warn};
 use thiserror::Error;
 use std::os::fd::{OwnedFd, AsRawFd};
@@ -86,32 +90,35 @@ impl PortalCapture {
             CursorMode::Hidden
         };
 
-        let session = screencast.create_session().await?;
-        let persist_mode = PersistMode::Application;
-        
+        let session = screencast.create_session(CreateSessionOptions::default()).await?;
+
         if restore_token.is_some() {
             debug!("[Portal] Using restore token for session");
         }
-        
+
         screencast
             .select_sources(
                 &session,
-                cursor_mode,
-                SourceType::Monitor | SourceType::Window,
-                false,
-                restore_token.as_ref().map(|t| t.0.as_str()),
-                persist_mode,
+                SelectSourcesOptions::default()
+                    .set_cursor_mode(cursor_mode)
+                    .set_sources(BitFlags::from(SourceType::Monitor))
+                    .set_multiple(false)
+                    .set_restore_token(restore_token.as_ref().map(|t| t.0.as_str()))
+                    .set_persist_mode(PersistMode::Application),
             )
-            .await?;
+            .await?
+            .response()?;
 
         debug!("[Portal] Starting session, waiting for user selection...");
         let response = screencast
-            .start(&session, &WindowIdentifier::default())
+            .start(&session, None, StartCastOptions::default())
             .await?
             .response()?;
 
         // Get PipeWire file descriptor - CRITICAL for connecting to the stream
-        let pipewire_fd = screencast.open_pipe_wire_remote(&session).await?;
+        let pipewire_fd = screencast
+            .open_pipe_wire_remote(&session, OpenPipeWireRemoteOptions {})
+            .await?;
         debug!("[Portal] Got PipeWire fd: {}", pipewire_fd.as_raw_fd());
         self.pipewire_fd = Some(pipewire_fd);
 

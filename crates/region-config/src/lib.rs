@@ -33,6 +33,9 @@ pub struct Settings {
     pub auto_use_specific_region: bool,
     pub last_region: LastRegion,
     pub global_shortcut: String,
+    /// Language override. Empty string = auto-detect from environment.
+    #[serde(default)]
+    pub language: String,
 }
 
 impl Default for Settings {
@@ -47,6 +50,7 @@ impl Default for Settings {
             auto_use_specific_region: false,
             last_region: LastRegion::default(),
             global_shortcut: String::new(),
+            language: String::new(),
         }
     }
 }

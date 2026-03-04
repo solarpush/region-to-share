@@ -19,3 +19,5 @@ global-hotkey = { workspace = true }
 crossbeam-channel = "0.5"
 rayon = "1.10"
 x11rb = { workspace = true }
+rust-i18n = "3"
+sys-locale = "0.3"

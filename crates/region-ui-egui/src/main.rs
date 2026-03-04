@@ -12,6 +12,11 @@ use std::fs;
 use rayon::prelude::*;
 use clap::Parser;
 use log::{debug, info, error, trace};
+use rust_i18n::t;
+
+rust_i18n::i18n!("locales", fallback = "en");
+
+const DEFAULT_WINDOW_SIZE: [f32; 2] = [400.0, 350.0];
 
 /// Region to Share - Screen region capture and streaming tool
 #[derive(Parser, Debug)]
@@ -35,20 +40,54 @@ fn is_wayland() -> bool {
 fn main() -> Result<(), eframe::Error> {
     let args = Args::parse();
     
-    // Initialize logger based on flags
-    let log_level = if args.verbose {
-        log::LevelFilter::Trace
+    // Initialize logger based on flags.
+    //
+    // --debug  : nos crates en DEBUG, dépendances bruyantes (zbus, sctk,
+    //            winit, eframe, wgpu…) réduites à WARN → logs propres
+    //            avec config et valeurs reçues.
+    // --verbose: tout en TRACE, utile pour investiguer les dépendances
+    //            (ex. protocole D-Bus, PipeWire, rendu GPU).
+    let mut builder = env_logger::Builder::new();
+
+    if args.verbose {
+        // Tout en Trace — spam assumé
+        builder.filter_level(log::LevelFilter::Trace);
     } else if args.debug {
-        log::LevelFilter::Debug
+        // Dépendances bruyantes → Warn
+        builder.filter_level(log::LevelFilter::Warn);
+        // Nos crates → Debug
+        for crate_name in &[
+            "region_ui_egui",
+            "region_portal",
+            "region_capture",
+            "region_core",
+            "region_config",
+        ] {
+            builder.filter_module(crate_name, log::LevelFilter::Debug);
+        }
     } else {
-        log::LevelFilter::Warn
+        // Mode normal : uniquement les warnings/erreurs
+        builder.filter_level(log::LevelFilter::Warn);
+    }
+
+    builder.format_timestamp_millis().init();
+
+    // Load config first so we can honour the saved language preference
+    let config = Config::new();
+
+    // Locale priority: saved setting > env var > "en"
+    let lang = if !config.settings.language.is_empty() {
+        config.settings.language.clone()
+    } else {
+        let locale = sys_locale::get_locale().unwrap_or_else(|| String::from("en"));
+        locale
+            .split(|c: char| c == '-' || c == '_')
+            .next()
+            .unwrap_or("en")
+            .to_owned()
     };
-    
-    env_logger::Builder::new()
-        .filter_level(log_level)
-        .format_timestamp_millis()
-        .init();
-    
+    rust_i18n::set_locale(&lang);
+
     info!("Region to Share v{}", env!("CARGO_PKG_VERSION"));
     debug!("Debug logging enabled");
     debug!("Session type: {}", if is_wayland() { "Wayland" } else { "X11" });
@@ -57,7 +96,8 @@ fn main() -> Result<(), eframe::Error> {
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([400.0, 350.0])
+            .with_inner_size(DEFAULT_WINDOW_SIZE)
+            .with_min_inner_size(DEFAULT_WINDOW_SIZE)
             .with_title("Region to Share")
             .with_resizable(true),
         ..Default::default()
@@ -67,7 +107,7 @@ fn main() -> Result<(), eframe::Error> {
         "Region to Share",
         options,
         Box::new(move |_cc| {
-            Ok(Box::new(RegionApp::new(runtime)))
+            Ok(Box::new(RegionApp::new(runtime, config)))
         }),
     )
 }
@@ -101,6 +141,11 @@ struct RegionApp {
     background_delay_frames: u32,  // Délai en frames avant minimisation
     // Backend Portal réutilisable (garde la session ouverte)
     portal_backend: Arc<TokioMutex<Option<Box<dyn CaptureBackend>>>>,
+    /// Taille logique renvoyée par get_screen_size() du backend actif.
+    /// Utilisée comme espace de référence pour la conversion des coords de
+    /// sélection. Diffère de la taille native du screenshot en cas de
+    /// fractional scaling Wayland (ex. 3072×864 logique vs 3840×1080 natif).
+    backend_screen_size: Option<(u32, u32)>,
     // Stats système
     cpu_usage: f64,
     memory_mb: f64,
@@ -127,14 +172,16 @@ enum StatsUpdate {
     },
     Frame(FrameData),
     Screenshot(FrameData),
+    /// Taille logique du backend (espace de coordonnées attendu pour les régions).
+    /// Pour le portail Wayland, c'est la taille logique rapportée (≠ pixels natifs
+    /// en cas de fractional scaling). Pour X11, c'est la résolution physique.
+    ScreenSize(u32, u32),
     Stopped,
 }
 
 impl RegionApp {
-    fn new(runtime: tokio::runtime::Runtime) -> Self {
+    fn new(runtime: tokio::runtime::Runtime, config: Config) -> Self {
         let (_tx, rx) = mpsc::unbounded_channel();
-        
-        let config = Config::new();
         
         // Charger la dernière région si disponible
         let (x, y, width, height) = if let Some(last_region) = config.get_last_region() {
@@ -179,6 +226,7 @@ impl RegionApp {
             pending_send_to_background: auto_start && auto_send_bg,
             background_delay_frames: 0,
             portal_backend: Arc::new(TokioMutex::new(None)),
+            backend_screen_size: None,
             cpu_usage: 0.0,
             memory_mb: 0.0,
             data_rate_mbps: 0.0,
@@ -315,28 +363,36 @@ impl RegionApp {
                 return;
             }
             
-            // Obtenir la taille réelle de l'écran via le backend
+            // Obtenir la taille logique de l'écran via le backend
+            // (espace de coordonnées à utiliser pour les régions).
+            // Pour le portail Wayland, c'est la taille logique rapportée ≠ pixels natifs.
             let (screen_width, screen_height) = backend.get_screen_size().await
                 .unwrap_or((1920, 1080));
-            let _ = (screen_width, screen_height); // Used for reference
+            // Transmettre la taille logique à l'UI avant le screenshot
+            let _ = new_tx.send(StatsUpdate::ScreenSize(screen_width, screen_height));
             
             // Capturer tout l'écran
-            if let Ok(frame) = backend.capture_screenshot().await {
-                if let Some(arc_buffer) = frame.data.as_arc_buffer() {
-                    let frame_data = FrameData {
-                        width: frame.width,
-                        height: frame.height,
-                        data: arc_buffer,
-                        format: frame.format,
-                    };
-                    let _ = new_tx.send(StatsUpdate::Screenshot(frame_data));
-                    
-                    // Stocker le backend pour réutilisation (évite un nouveau dialogue Portal)
-                    if use_wayland {
-                        *portal_backend_arc.lock().await = Some(backend);
+            match backend.capture_screenshot().await {
+                Err(e) => {
+                    log::error!("[UI] capture_screenshot failed: {:?}", e);
+                }
+                Ok(frame) => {
+                    if let Some(arc_buffer) = frame.data.as_arc_buffer() {
+                        let frame_data = FrameData {
+                            width: frame.width,
+                            height: frame.height,
+                            data: arc_buffer,
+                            format: frame.format,
+                        };
+                        let _ = new_tx.send(StatsUpdate::Screenshot(frame_data));
+                        
+                        // Stocker le backend pour réutilisation (évite un nouveau dialogue Portal)
+                        if use_wayland {
+                            *portal_backend_arc.lock().await = Some(backend);
+                        }
+                        
+                        ctx_clone.request_repaint();
                     }
-                    
-                    ctx_clone.request_repaint();
                 }
             }
         });
@@ -344,13 +400,6 @@ impl RegionApp {
     
     fn apply_selection(&mut self, ctx: &egui::Context) {
         if let (Some(start), Some(end)) = (self.selection_start, self.selection_end) {
-            // Obtenir les dimensions réelles du screenshot
-            let (screenshot_width, screenshot_height) = if let Some(texture) = &self.screenshot_texture {
-                (texture.size()[0] as f32, texture.size()[1] as f32)
-            } else {
-                return;
-            };
-            
             // Obtenir le rectangle où le screenshot a été affiché
             let display_rect = if let Some(rect) = self.screenshot_display_rect {
                 rect
@@ -358,13 +407,32 @@ impl RegionApp {
                 return;
             };
             
-            // Obtenir le facteur de scaling DPI
-            let pixels_per_point = ctx.pixels_per_point();
-            let _ = pixels_per_point; // Used for DPI calculations
+            // Calculer le ratio de l'espace logique du backend vers les points egui.
+            //
+            // On utilise backend_screen_size (taille logique renvoyée par
+            // get_screen_size()) plutôt que la taille native de la texture
+            // screenshot. Sur Wayland avec fractional scaling, la texture est
+            // en pixels natifs (ex. 3840×1080) mais le portail attend des
+            // coordonnées logiques (ex. 3072×864). scale_region_to_stream()
+            // dans PortalBackend se charge ensuite de la conversion vers les
+            // pixels PipeWire natifs. Sans ça, les coordonnées seraient
+            // multipliées deux fois par le facteur de scaling.
+            //
+            // Pour X11 (sans fractional scaling), backend_screen_size == taille
+            // native, ce qui donne le même résultat qu'avant.
+            let (ref_w, ref_h) = if let Some((w, h)) = self.backend_screen_size {
+                (w as f32, h as f32)
+            } else if let Some(texture) = &self.screenshot_texture {
+                // Fallback : utiliser la taille de la texture (ancien comportement)
+                (texture.size()[0] as f32, texture.size()[1] as f32)
+            } else {
+                return;
+            };
             
-            // Calculer le ratio de scaling exact
-            let scale_x = screenshot_width / display_rect.width();
-            let scale_y = screenshot_height / display_rect.height();
+            // Ratio espace-backend / espace-egui (≈ 1.0 sur Wayland portal,
+            // = facteur DPI sur X11 HiDPI)
+            let scale_x = ref_w / display_rect.width();
+            let scale_y = ref_h / display_rect.height();
             
             // Convertir les coordonnées de sélection vers les coordonnées réelles
             let rel_min_x = (start.x.min(end.x) - display_rect.min.x).max(0.0);
@@ -393,13 +461,21 @@ impl RegionApp {
                 let _ = self.config.save();
             }
             
-            // Sortir du plein écran
+            // Sortir du plein écran (les décorations seront gérées par le handler
+            // pending_resize qui les désactive si streaming_only = true)
             ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
-            ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(true));
             ctx.send_viewport_cmd(egui::ViewportCommand::Resizable(true));
             
-            // Marquer le redimensionnement en attente
-            self.pending_resize = Some((self.width, self.height));
+            // pending_resize doit être en egui POINTS (unité de InnerSize).
+            // region_width est en unités backend (portal logique ou pixels physiques
+            // X11). En divisant par scale_x on retrouve les egui points bruts de
+            // sélection, quelle que soit la valeur de ppp ou de scale_x.
+            // • Wayland portal ppp=1.25 : scale_x≈1.0  → window_pts = region_w / 1.0   ✓
+            // • X11 HiDPI     ppp=2.0  : scale_x=2.0  → window_pts = region_w / 2.0   ✓
+            // • X11 no-HiDPI  ppp=1.0  : scale_x=1.0  → window_pts = region_w / 1.0   ✓
+            let window_pts_w = (region_width / scale_x).round().max(DEFAULT_WINDOW_SIZE[0]);
+            let window_pts_h = (region_height / scale_y).round().max(DEFAULT_WINDOW_SIZE[1]);
+            self.pending_resize = Some((window_pts_w as u32, window_pts_h as u32));
             self.resize_frame_count = 0;
             
             ctx.request_repaint();
@@ -444,6 +520,10 @@ impl RegionApp {
                     }
                     StatsUpdate::Screenshot(frame_data) => {
                         last_screenshot = Some(frame_data);
+                    }
+                    StatsUpdate::ScreenSize(w, h) => {
+                        debug!("[UI] backend_screen_size = {}x{}", w, h);
+                        self.backend_screen_size = Some((w, h));
                     }
                     StatsUpdate::Stopped => {
                         self.capturing = false;
@@ -558,13 +638,24 @@ impl eframe::App for RegionApp {
             
             // Attendre plus de frames sur Wayland pour laisser le window manager
             // traiter la sortie du plein écran
-            let frames_to_wait = if is_wayland() { 15 } else { 5 };
+            let frames_to_wait = if is_wayland() { 30 } else { 5 };
             
             if self.resize_frame_count >= frames_to_wait {
+                // target_width/target_height sont déjà en egui points
+                // (stockés ainsi dans apply_selection), pas besoin de /ppp
                 let window_width = target_width as f32;
                 let window_height = target_height as f32;
-                
-                // Sur Wayland, envoyer plusieurs fois la commande de taille
+
+                // En mode streaming : supprimer les décorations pour que
+                // InnerSize == taille totale visible (pas de barre de titre décalée)
+                if self.streaming_only {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(false));
+                }
+
+                // Relâcher la contrainte min avant de redimensionner
+                ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(
+                    egui::vec2(window_width, window_height)
+                ));
                 ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(
                     egui::vec2(window_width, window_height)
                 ));
@@ -607,7 +698,7 @@ impl eframe::App for RegionApp {
                     if !self.selection_ready {
                         ui.vertical_centered(|ui| {
                             ui.add_space(300.0);
-                            ui.heading("Capture de l'ecran...");
+                            ui.heading(t!("selection.loading"));
                             ui.spinner();
                         });
                         return;
@@ -638,8 +729,8 @@ impl eframe::App for RegionApp {
                     
                     ui.vertical_centered(|ui| {
                         ui.add_space(10.0);
-                        ui.heading("Selectionnez une region");
-                        ui.label("Cliquez et glissez pour selectionner | Echap pour annuler");
+                        ui.heading(t!("selection.title"));
+                        ui.label(t!("selection.hint"));
                     });
                     
                     // Zone de sélection
@@ -666,7 +757,8 @@ impl eframe::App for RegionApp {
                         // Annuler la sélection et revenir en mode normal
                         ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
                         ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(true));
-                        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(900.0, 700.0)));
+                        ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(egui::vec2(DEFAULT_WINDOW_SIZE[0], DEFAULT_WINDOW_SIZE[1])));
+                        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(DEFAULT_WINDOW_SIZE[0], DEFAULT_WINDOW_SIZE[1])));
                         ctx.send_viewport_cmd(egui::ViewportCommand::Resizable(true));
                         self.selecting_region = false;
                         self.screenshot_texture = None;
@@ -675,32 +767,53 @@ impl eframe::App for RegionApp {
                     // Dessiner la sélection
                     if let (Some(start), Some(end)) = (self.selection_start, self.selection_end) {
                         let sel_rect = egui::Rect::from_two_pos(start, end);
-                        
-                        // Rectangle de sélection
+
+                        let w = sel_rect.width().abs();
+                        let h = sel_rect.height().abs();
+                        let too_small = w < DEFAULT_WINDOW_SIZE[0] || h < DEFAULT_WINDOW_SIZE[1];
+
+                        let (stroke_color, fill_color) = if too_small {
+                            (
+                                egui::Color32::from_rgb(255, 60, 60),
+                                egui::Color32::from_rgba_unmultiplied(255, 60, 60, 60),
+                            )
+                        } else {
+                            (
+                                egui::Color32::from_rgb(0, 255, 0),
+                                egui::Color32::from_rgba_unmultiplied(0, 255, 0, 60),
+                            )
+                        };
+
                         ui.painter().rect_stroke(
                             sel_rect,
                             0.0,
-                            egui::Stroke::new(3.0, egui::Color32::from_rgb(0, 255, 0)),
+                            egui::Stroke::new(3.0, stroke_color),
                         );
                         ui.painter().rect_filled(
                             sel_rect,
                             0.0,
-                            egui::Color32::from_rgba_unmultiplied(0, 255, 0, 60),
+                            fill_color,
                         );
-                        
-                        let w = (sel_rect.width()).abs() as i32;
-                        let h = (sel_rect.height()).abs() as i32;
+
+                        let wi = w as i32;
+                        let hi = h as i32;
                         let x = sel_rect.min.x as i32;
                         let y = sel_rect.min.y as i32;
-                        
+
                         // Info en haut à gauche de la sélection
                         let text_pos = egui::Pos2::new(sel_rect.min.x, sel_rect.min.y - 25.0);
+                        let label = if too_small {
+                            format!("{}x{} — min {}x{} (Result is too small and resizing is required with deformation)", wi, hi,
+                                DEFAULT_WINDOW_SIZE[0] as i32, DEFAULT_WINDOW_SIZE[1] as i32)
+                        } else {
+                            format!("{}x{} at ({}, {})", wi, hi, x, y)
+                        };
                         ui.painter().text(
                             text_pos,
                             egui::Align2::LEFT_BOTTOM,
-                            format!("{}x{} at ({}, {})", w, h, x, y),
+                            label,
                             egui::FontId::proportional(18.0),
-                            egui::Color32::WHITE,
+                            if too_small { egui::Color32::from_rgb(255, 120, 120) } else { egui::Color32::WHITE },
                         );
                     }
                 });
@@ -726,12 +839,46 @@ impl eframe::App for RegionApp {
                         );
                     }
                     
-                    // Boutons en haut à droite (options + arrière-plan)
+                    // Drag pour déplacer la fenêtre (pas de décoration = on gère soi-même)
                     let button_size = egui::vec2(28.0, 28.0);
                     let spacing = 5.0;
-                    
-                    // Bouton arrière-plan (↓) - seulement sur X11
-                    if !Self::is_wayland() {
+
+                    // Calculer les rects des boutons à l'avance pour les exclure du drag
+                    let gear_rect = egui::Rect::from_min_size(
+                        egui::pos2(ui.max_rect().right() - button_size.x - 5.0, ui.max_rect().top() + 5.0),
+                        button_size,
+                    );
+                    let bg_rect = egui::Rect::from_min_size(
+                        egui::pos2(ui.max_rect().right() - button_size.x * 2.0 - spacing * 2.0 - 5.0, ui.max_rect().top() + 5.0),
+                        button_size,
+                    );
+
+                    let drag_response = ui.allocate_rect(ui.max_rect(), egui::Sense::click_and_drag());
+
+                    // Curseur Move au survol (hors boutons et hors modal options)
+                    if !self.show_streaming_options {
+                        if let Some(hover_pos) = ctx.input(|i| i.pointer.hover_pos()) {
+                            let over_button = gear_rect.contains(hover_pos)
+                                || bg_rect.contains(hover_pos);
+                            if !over_button {
+                                ctx.set_cursor_icon(egui::CursorIcon::Move);
+                            }
+                        }
+                    }
+
+                    if drag_response.drag_started() {
+                        if let Some(pos) = ctx.input(|i| i.pointer.press_origin()) {
+                            let over_button = gear_rect.contains(pos)
+                                || bg_rect.contains(pos);
+                            if !over_button {
+                                ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                            }
+                        }
+                    }
+
+                    // Boutons en haut à droite (options + arrière-plan)
+                    // Bouton arrière-plan : ↓ passe en arrière-plan (X11) ou réduit (Wayland)
+                    {
                         let bg_button_pos = egui::pos2(
                             ui.max_rect().right() - button_size.x * 2.0 - spacing * 2.0 - 5.0,
                             ui.max_rect().top() + 5.0
@@ -754,8 +901,15 @@ impl eframe::App for RegionApp {
                             egui::Color32::WHITE,
                         );
                         
+                        if bg_response.hovered() {
+                            ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
+                        }
                         if bg_response.clicked() {
-                            Self::lower_window_x11();
+                            if Self::is_wayland() {
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                            } else {
+                                Self::lower_window_x11();
+                            }
                         }
                     }
                     
@@ -780,6 +934,9 @@ impl eframe::App for RegionApp {
                         egui::Color32::WHITE,
                     );
                     
+                    if response.hovered() {
+                        ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
+                    }
                     if response.clicked() {
                         self.show_streaming_options = !self.show_streaming_options;
                     }
@@ -787,74 +944,89 @@ impl eframe::App for RegionApp {
             
             // Modal d'options pendant le streaming
             if self.show_streaming_options {
-                egui::Window::new("Options")
+                egui::Window::new(t!("streaming_options.title"))
                     .collapsible(false)
-                    .resizable(false)
+                    .resizable(true)
                     .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                     .show(ctx, |ui| {
-                        ui.heading("Options de streaming");
+                        egui::ScrollArea::both().show(ui, |ui| {
+                        ui.heading(t!("streaming_options.heading"));
                         ui.separator();
                         
                         // Stats de performance
                         if self.config.settings.show_performance {
-                            ui.label("📊 Performance");
+                            ui.label(t!("stats.performance"));
                             ui.horizontal(|ui| {
-                                ui.label(format!("FPS: {:.1}", self.current_fps));
+                                ui.label(format!("{}: {:.1}", t!("stats.fps"), self.current_fps));
                                 ui.separator();
-                                ui.label(format!("Capture: {:.2}ms", self.current_capture_ms));
+                                ui.label(format!("{}: {:.2}ms", t!("stats.capture"), self.current_capture_ms));
                             });
                             
-                            ui.label("💻 Ressources système");
+                            ui.label(t!("stats.system_resources"));
                             ui.horizontal(|ui| {
                                 ui.label(format!("CPU: {:.1}%", self.cpu_usage));
                                 ui.separator();
                                 ui.label(format!("RAM: {:.1} MB", self.memory_mb));
                             });
                             ui.horizontal(|ui| {
-                                ui.label(format!("Débit: {:.2} MB/s", self.data_rate_mbps));
+                                ui.label(format!("{}: {:.2} MB/s", t!("stats.datarate"), self.data_rate_mbps));
                                 ui.separator();
-                                ui.label(format!("Frames: {}", self.frames_captured));
+                                ui.label(format!("{}: {}", t!("stats.frames"), self.frames_captured));
                             });
                             ui.separator();
                         }
                         
                         // Frame rate
                         ui.horizontal(|ui| {
-                            ui.label("Frame Rate:");
+                            ui.label(t!("settings.framerate"));
                             let mut frame_rate = self.config.settings.frame_rate as i32;
                             if ui.add(egui::Slider::new(&mut frame_rate, 15..=120).suffix(" FPS")).changed() {
                                 self.config.set_frame_rate(frame_rate as u32);
                             }
                         });
+                        ui.horizontal( |ui | {
+                            ui.label(egui::RichText::new("Max 60 Fps on Wayland").small());
+                        });
                         
-                        ui.checkbox(&mut self.config.settings.show_performance, "Afficher performances");
+                        ui.checkbox(&mut self.config.settings.show_performance, t!("settings.show_performance_short"));
                         
                         ui.separator();
                         
                         ui.horizontal(|ui| {
-                            if ui.button("Nouvelle sélection").clicked() {
+                            if ui.button(t!("action.new_selection")).clicked() {
                                 self.stop_capture();
                                 self.streaming_only = false;
                                 self.show_streaming_options = false;
+                                // Réactiver les décorations et revenir à la taille par défaut
+                                // avant que le plein écran de sélection ne se déclenche
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(true));
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Resizable(true));
+                                ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(egui::vec2(DEFAULT_WINDOW_SIZE[0], DEFAULT_WINDOW_SIZE[1])));
+                                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(DEFAULT_WINDOW_SIZE[0], DEFAULT_WINDOW_SIZE[1])));
                                 self.start_region_selection(ctx);
                             }
                             
-                            if ui.button("Arrêter").clicked() {
+                            if ui.button(t!("action.stop")).clicked() {
                                 self.stop_capture();
                                 self.streaming_only = false;
                                 self.show_streaming_options = false;
-                                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(400.0, 300.0)));
+                                // Réactiver les décorations pour revenir au mode UI normal
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(true));
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Resizable(true));
+                                ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(egui::vec2(DEFAULT_WINDOW_SIZE[0], DEFAULT_WINDOW_SIZE[1])));
+                                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(DEFAULT_WINDOW_SIZE[0], DEFAULT_WINDOW_SIZE[1])));
                             }
                         });
                         
                         ui.separator();
                         
-                        if ui.button("Fermer").clicked() {
+                        if ui.button(t!("action.close")).clicked() {
                             self.show_streaming_options = false;
                             if let Err(e) = self.config.save() {
                                 error!("[Config] Save error: {}", e);
                             }
                         }
+                        }); // end ScrollArea
                     });
             }
             
@@ -870,11 +1042,11 @@ impl eframe::App for RegionApp {
                 ui.add_space(20.0);
                 ui.heading("Region to Share");
                 ui.add_space(10.0);
-                ui.label("Capturez et partagez une région de votre écran");
+                ui.label(t!("main.subtitle"));
                 ui.add_space(30.0);
                 
                 // Bouton principal de sélection
-                if ui.add_sized([200.0, 50.0], egui::Button::new("🖱 Sélectionner une région")).clicked() {
+                if ui.add_sized([200.0, 50.0], egui::Button::new(format!("🖱 {}", t!("action.select_region")))).clicked() {
                     self.start_region_selection(ctx);
                 }
                 
@@ -883,8 +1055,8 @@ impl eframe::App for RegionApp {
                 // Dernière région si disponible
                 if self.config.settings.remember_last_region {
                     if let Some(last) = self.config.get_last_region() {
-                        ui.label(format!("Dernière région: {}x{} à ({}, {})", last.width, last.height, last.x, last.y));
-                        if ui.button("Réutiliser").clicked() {
+                        ui.label(t!("main.last_region", w = last.width.to_string(), h = last.height.to_string(), x = last.x.to_string(), y = last.y.to_string()));
+                        if ui.button(t!("action.reuse")).clicked() {
                             self.x = last.x;
                             self.y = last.y;
                             self.width = last.width;
@@ -892,6 +1064,8 @@ impl eframe::App for RegionApp {
                             self.streaming_only = true;
                             self.pending_resize = Some((self.width, self.height));
                             self.resize_frame_count = 0;
+                            // Supprimer les décorations pour le mode streaming
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(false));
                             ctx.request_repaint();
                         }
                     }
@@ -902,58 +1076,96 @@ impl eframe::App for RegionApp {
             ui.separator();
             
             // Paramètres (toujours visibles, compacts)
-            ui.collapsing("⚙ Paramètres", |ui| {
+            ui.collapsing(format!("⚙ {}", t!("settings.title")), |ui| {
+                egui::ScrollArea::both()
+                    .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label("Frame Rate:");
+                    ui.label(t!("settings.framerate"));
                     let mut frame_rate = self.config.settings.frame_rate as i32;
                     if ui.add(egui::Slider::new(&mut frame_rate, 15..=120).suffix(" FPS")).changed() {
                         self.config.set_frame_rate(frame_rate as u32);
                     }
                 });
-                
+                ui.horizontal( |ui | {
+                    ui.label(egui::RichText::new("Max 60 Fps on Wayland").small());
+                });
                 ui.add_space(5.0);
-                ui.label("🪟 Fenêtre");
+                ui.label(t!("settings.window"));
                 ui.horizontal(|ui| {
-                    ui.label("Opacité:");
+                    ui.label(t!("settings.opacity"));
                     let mut opacity = self.config.settings.window_opacity;
                     if ui.add(egui::Slider::new(&mut opacity, 0.3..=1.0).show_value(true)).changed() {
                         self.config.set_window_opacity(opacity);
                     }
                 });
                 
-                ui.checkbox(&mut self.config.settings.auto_send_to_background, 
-                    "Envoyer en arrière-plan après sélection (X11) / Réduire (Wayland)");
+                ui.checkbox(&mut self.config.settings.auto_send_to_background,
+                    t!("settings.send_to_background"));
                 
                 ui.add_space(5.0);
-                ui.label("📍 Région");
-                ui.checkbox(&mut self.config.settings.remember_last_region, "Se souvenir de la dernière région");
-                ui.checkbox(&mut self.config.settings.auto_use_specific_region, 
-                    "Utiliser automatiquement la dernière région au démarrage");
+                ui.label(t!("settings.region"));
+                ui.checkbox(&mut self.config.settings.remember_last_region, t!("settings.remember_region"));
+                ui.checkbox(&mut self.config.settings.auto_use_specific_region,
+                    t!("settings.auto_use_region"));
                 
                 ui.add_space(5.0);
-                ui.checkbox(&mut self.config.settings.show_performance, "Afficher les performances");
-                
+                ui.checkbox(&mut self.config.settings.show_performance, t!("settings.show_performance"));
+
+                ui.add_space(5.0);
+                ui.label(t!("settings.language"));
+                let languages = [("auto", t!("settings.lang_auto")), ("fr", "Français".into()), ("en", "English".into())];
+                let current = if self.config.settings.language.is_empty() {
+                    "auto"
+                } else {
+                    &self.config.settings.language
+                };
+                let mut selected = current.to_owned();
+                egui::ComboBox::from_id_salt("language_selector")
+                    .selected_text(languages.iter().find(|(k, _)| *k == selected).map(|(_, v)| v.as_ref()).unwrap_or(selected.as_str()))
+                    .show_ui(ui, |ui| {
+                        for (key, label) in &languages {
+                            ui.selectable_value(&mut selected, key.to_string(), label.as_ref());
+                        }
+                    });
+                if selected != current {
+                    let new_lang = if selected == "auto" { String::new() } else { selected.clone() };
+                    self.config.settings.language = new_lang;
+                    let locale_to_apply = if selected == "auto" {
+                        sys_locale::get_locale()
+                            .unwrap_or_else(|| String::from("en"))
+                            .split(|c: char| c == '-' || c == '_')
+                            .next()
+                            .unwrap_or("en")
+                            .to_owned()
+                    } else {
+                        selected
+                    };
+                    rust_i18n::set_locale(&locale_to_apply);
+                    let _ = self.config.save();
+                }
+
                 ui.add_space(5.0);
                 ui.horizontal(|ui| {
-                    ui.label("Raccourci global:");
+                    ui.label(t!("settings.global_shortcut"));
                     let mut shortcut = self.config.settings.global_shortcut.clone();
                     if ui.text_edit_singleline(&mut shortcut).changed() {
                         self.config.settings.global_shortcut = shortcut;
                     }
                 });
-                ui.label("(Ex: Meta+Ctrl+W pour toggle capture)");
+                ui.label(t!("settings.shortcut_hint"));
                 
                 ui.add_space(10.0);
-                if ui.button("💾 Sauvegarder").clicked() {
+                if ui.button(t!("action.save")).clicked() {
                     if let Err(e) = self.config.save() {
                         error!("[Config] Save error: {}", e);
                     }
                 }
+                }); // end ScrollArea
             });
             
             ui.add_space(10.0);
             ui.vertical_centered(|ui| {
-                ui.label("La fenêtre de streaming peut être partagée dans Meet, Discord, OBS...");
+                ui.label(t!("main.streaming_hint"));
             });
         });
         

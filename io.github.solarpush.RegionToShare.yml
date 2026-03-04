@@ -1,0 +1,142 @@
+app-id: io.github.solarpush.RegionToShare
+runtime: org.freedesktop.Platform
+runtime-version: '25.08'
+sdk: org.freedesktop.Sdk
+
+# Extensions SDK nécessaires
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable  # toolchain Rust stable
+  - org.freedesktop.Sdk.Extension.llvm20        # clang/libclang pour bindgen (PipeWire)
+
+command: region-to-share
+separate-locales: false
+
+finish-args:
+  # ── Affichage ──────────────────────────────────────────────────────────────
+  - --socket=wayland          # Wayland natif (GNOME, KDE, Sway, Hyprland…)
+  - --socket=fallback-x11     # X11 / XWayland fallback
+  - --share=ipc               # Mémoire partagée X11 (MIT-SHM)
+  # ── GPU / DMA-BUF ──────────────────────────────────────────────────────────
+  # --device=all est requis (pas seulement dri) pour que le driver Mesa du sandbox
+  # puisse importer les DRM buffers tuilés (modifiers vendor AMD/Intel/Nvidia)
+  # produits par le compositor hôte. Avec --device=dri seul, Mesa sandbox ne
+  # connaît pas les modifiers propriétaires → GL_INVALID_OPERATION.
+  - --device=all
+  # ── D-Bus session (XDG Portal) ─────────────────────────────────────────────
+  - --socket=session-bus
+  - --talk-name=org.freedesktop.portal.Desktop
+  - --talk-name=org.freedesktop.portal.ScreenCast
+  # ── PipeWire (capture Wayland) ─────────────────────────────────────────────
+  - --filesystem=xdg-run/pipewire-0
+  # ── Curseurs Wayland ──────────────────────────────────────────────────────
+  # La runtime org.freedesktop.Platform inclut Adwaita à /usr/share/icons/Adwaita
+  - --env=XCURSOR_PATH=/usr/share/icons
+  - --env=XCURSOR_THEME=Adwaita
+  - --env=XDG_DATA_DIRS=/app/share:/usr/share
+
+# ── Options de build globales ──────────────────────────────────────────────────
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/llvm20/bin
+  env:
+    CARGO_HOME: /run/build/cargo-home
+    RUST_BACKTRACE: '1'
+    # libclang pour bindgen (crate pipewire)
+    LIBCLANG_PATH: /usr/lib/sdk/llvm20/lib
+    BINDGEN_EXTRA_CLANG_ARGS: >-
+      -I/usr/lib/sdk/llvm20/include
+      -I/usr/include
+
+modules:
+  # ── Application principale ──────────────────────────────────────────────────
+  - name: region-to-share
+    buildsystem: simple
+
+    build-options:
+      append-path: /usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/llvm20/bin
+      env:
+        CARGO_HOME: /run/build/cargo-home
+        LIBCLANG_PATH: /usr/lib/sdk/llvm20/lib
+        BINDGEN_EXTRA_CLANG_ARGS: >-
+          -I/usr/lib/sdk/llvm20/include
+          -I/usr/include
+
+    build-commands:
+      # ── Config vendor (CARGO_HOME override empêche la lecture du .cargo/config
+      #    généré par flatpak-cargo-generator → on le recrée explicitement)
+      - mkdir -p .cargo
+      - |
+        cat > .cargo/config.toml << 'EOF'
+        [source.crates-io]
+        replace-with = "vendored-sources"
+
+        [source.vendored-sources]
+        directory = "cargo/vendor"
+        EOF
+
+      # ── Compile ─────────────────────────────────────────────────────────────
+      - cargo --offline build --release
+
+      # ── Binaire ─────────────────────────────────────────────────────────────
+      - install -Dm755 target/release/region-ui-egui /app/bin/region-to-share
+
+      # ── Fichier .desktop ────────────────────────────────────────────────────
+      - install -Dm644 io.github.solarpush.RegionToShare.desktop
+          /app/share/applications/io.github.solarpush.RegionToShare.desktop
+
+      # ── Icônes ──────────────────────────────────────────────────────────────
+      - install -Dm644 images/region-to-share-32.png
+          /app/share/icons/hicolor/32x32/apps/io.github.solarpush.RegionToShare.png
+      - install -Dm644 images/region-to-share-48.png
+          /app/share/icons/hicolor/48x48/apps/io.github.solarpush.RegionToShare.png
+      - install -Dm644 images/region-to-share-64.png
+          /app/share/icons/hicolor/64x64/apps/io.github.solarpush.RegionToShare.png
+      - install -Dm644 images/region-to-share-128.png
+          /app/share/icons/hicolor/128x128/apps/io.github.solarpush.RegionToShare.png
+      - install -Dm644 images/region-to-share-256.png
+          /app/share/icons/hicolor/256x256/apps/io.github.solarpush.RegionToShare.png
+      - install -Dm644 images/region-to-share-512.png
+          /app/share/icons/hicolor/512x512/apps/io.github.solarpush.RegionToShare.png
+      - install -Dm644 images/region-to-share.svg
+          /app/share/icons/hicolor/scalable/apps/io.github.solarpush.RegionToShare.svg
+
+      # ── AppStream metadata (obligatoire Flathub) ─────────────────────────────
+      - install -Dm644 io.github.solarpush.RegionToShare.metainfo.xml
+          /app/share/metainfo/io.github.solarpush.RegionToShare.metainfo.xml
+
+    sources:
+      # Sources locales
+      - type: dir
+        path: .
+
+      # Crates Cargo vendorisés (OBLIGATOIRE pour build offline/Flathub)
+      # Générer avec :
+      #   uv tool install flatpak-cargo-generator
+      #   flatpak-cargo-generator Cargo.lock -o cargo-sources.json
+      - cargo-sources.json
+
+# ─────────────────────────────────────────────────────────────────────────────
+# COMMANDES UTILES
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# 1. Installer les dépendances flatpak :
+#    flatpak install flathub \
+#      org.freedesktop.Platform//25.08 \
+#      org.freedesktop.Sdk//25.08 \
+#      org.freedesktop.Sdk.Extension.rust-stable//25.08 \
+#      org.freedesktop.Sdk.Extension.llvm20//25.08
+#
+# 2. Générer cargo-sources.json (une seule fois, ou après mise à jour Cargo.lock) :
+#    uv tool install flatpak-cargo-generator
+#    flatpak-cargo-generator Cargo.lock -o cargo-sources.json
+#
+# 3. Build local (test) :
+#    flatpak-builder --force-clean --user --install build-flatpak \
+#      io.github.solarpush.RegionToShare.yml
+#
+# 4. Lancer l'app installée :
+#    flatpak run io.github.solarpush.RegionToShare
+#
+# 5. Build rapide sans install (debug) :
+#    flatpak-builder --force-clean build-flatpak \
+#      io.github.solarpush.RegionToShare.yml
+# ─────────────────────────────────────────────────────────────────────────────

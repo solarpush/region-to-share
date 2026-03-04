@@ -1,0 +1,45 @@
+selection:
+  loading: "Capture de l'écran..."
+  title: "Sélectionnez une région"
+  hint: "Cliquez et glissez pour sélectionner | Échap pour annuler"
+
+streaming_options:
+  title: "Options"
+  heading: "Options de streaming"
+
+stats:
+  performance: "📊 Performance"
+  fps: "FPS"
+  capture: "Capture"
+  system_resources: "💻 Ressources système"
+  datarate: "Débit"
+  frames: "Frames"
+
+settings:
+  framerate: "Frame Rate :"
+  show_performance_short: "Afficher performances"
+  show_performance: "Afficher les performances"
+  title: "Paramètres"
+  window: "🪟 Fenêtre"
+  opacity: "Opacité :"
+  send_to_background: "Envoyer en arrière-plan après sélection (X11) / Réduire (Wayland)"
+  region: "📍 Région"
+  remember_region: "Se souvenir de la dernière région"
+  auto_use_region: "Utiliser automatiquement la dernière région au démarrage"
+  global_shortcut: "Raccourci global :"
+  shortcut_hint: "(Ex : Meta+Ctrl+W pour activer/désactiver la capture)"
+  language: "Langue :"
+  lang_auto: "Automatique (système)"
+
+action:
+  new_selection: "Nouvelle sélection"
+  stop: "Arrêter"
+  close: "Fermer"
+  select_region: "Sélectionner une région"
+  reuse: "Réutiliser"
+  save: "💾 Sauvegarder"
+
+main:
+  subtitle: "Capturez et partagez une région de votre écran"
+  last_region: "Dernière région : %{w}x%{h} à (%{x}, %{y})"
+  streaming_hint: "La fenêtre de streaming peut être partagée dans Meet, Discord, OBS..."

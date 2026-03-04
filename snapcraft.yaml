@@ -1,9 +1,10 @@
 name: region-to-share
 base: core24
-version: '2.0.0-beta1'
+version: '2.0.0-beta3'
+title: Region to Share
 summary: Share selected screen regions in video calls
 description: |
-  Region-to-Share allows you to select a specific area of your screen
+  Region to Share allows you to select a specific area of your screen
   and display it in a window that you can share directly 
   in your video conferencing applications (Google Meet, Teams, Discord, etc.).
 
@@ -36,7 +37,8 @@ source-code: https://github.com/solarpush/region-to-share
 
 donation:
   - https://coff.ee/solarpush
-
+contact: https://github.com/solarpush/region-to-share
+license: MIT
 platforms:
   amd64:
     build-on: [amd64]
@@ -57,16 +59,14 @@ apps:
       - network
       - unity7
       - gsettings
-      # Portal/PipeWire for Wayland screen capture
-      # - screencast-legacy
-      # - pipewire
-      # Audio interfaces often required for full PipeWire access
-      # - audio-playback
-      # - audio-record
+
     environment:
       # OpenGL - use host drivers
       LIBGL_DRIVERS_PATH: "/usr/lib/x86_64-linux-gnu/dri:$SNAP/usr/lib/x86_64-linux-gnu/dri"
       __EGL_VENDOR_LIBRARY_DIRS: "/usr/share/glvnd/egl_vendor.d:$SNAP/usr/share/glvnd/egl_vendor.d"
+      XCURSOR_PATH: $SNAP/usr/share/icons
+      XCURSOR_THEME: "Adwaita"
+      XDG_DATA_DIRS: "$SNAP/usr/share:$XDG_DATA_DIRS"
 
 parts:
   region-to-share:
@@ -132,6 +132,7 @@ parts:
       - libxkbcommon0
       - libxkbcommon-x11-0
       - xkb-data
+      - libx11-data
       # PipeWire runtime (client only, daemon on host)
       - libpipewire-0.3-0
       - libspa-0.2-modules
@@ -149,6 +150,7 @@ parts:
       - libfontconfig1
       - libfreetype6
       - fonts-dejavu-core
+      - adwaita-icon-theme
     override-build: |
       craftctl default
       
@@ -213,6 +215,11 @@ parts:
         export XKB_CONFIG_ROOT="$SNAP/usr/share/X11/xkb"
       else
         export XKB_CONFIG_ROOT="/usr/share/X11/xkb"
+      fi
+      
+      # X11 locale/Compose files (xkbcommon Compose key support)
+      if [ -d "$SNAP/usr/share/X11/locale" ]; then
+        export XLOCALEDIR="$SNAP/usr/share/X11/locale"
       fi
       
       # OpenGL - prefer host drivers for better performance

@@ -1,0 +1,250 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+	<id>
+		io.github.solarpush.RegionToShare
+	</id>
+	<name>
+		Region to Share
+	</name>
+	<summary>
+		Share a selected screen region in video calls
+	</summary>
+	<metadata_license>
+		CC0-1.0
+	</metadata_license>
+	<project_license>
+		MIT
+	</project_license>
+	<developer id="io.github.solarpush">
+		<name>
+			solarpush
+		</name>
+	</developer>
+	<description>
+		<p>
+			Region-to-Share lets you select a specific area of your screen and display it
+			in a dedicated window that you can share directly in video conferencing
+			applications such as Google Meet, Teams, Discord, or Zoom.
+		</p>
+		<p>
+			This is especially useful for ultra-wide (21:9, 32:9) or multi-monitor setups
+			where sharing the full screen would expose too much, or where you only want to
+			share one application region without switching windows.
+		</p>
+		<p>
+			Features:
+		</p>
+		<ul>
+			<li>
+				Interactive region selection with real-time preview
+			</li>
+			<li>
+				High-performance real-time display (native Rust, low CPU usage)
+			</li>
+			<li>
+				Native Wayland support via XDG Desktop Portal / PipeWire
+			</li>
+			<li>
+				Native X11 support
+			</li>
+			<li>
+				Modern egui interface
+			</li>
+			<li>
+				Adjustable window opacity
+			</li>
+			<li>
+				Performance monitoring overlay
+			</li>
+			<li>
+				Remembers last selected region
+			</li>
+		</ul>
+	</description>
+	<launchable type="desktop-id">
+		io.github.solarpush.RegionToShare.desktop
+	</launchable>
+	<url type="homepage">
+		https://github.com/solarpush/region-to-share
+	</url>
+	<url type="bugtracker">
+		https://github.com/solarpush/region-to-share/issues
+	</url>
+	<url type="donation">
+		https://coff.ee/solarpush
+	</url>
+	<url type="vcs-browser">
+		https://github.com/solarpush/region-to-share
+	</url>
+	<screenshots>
+		<screenshot type="default">
+			<caption>
+				Region selection on an ultrawide screen
+			</caption>
+			<image>
+				https://raw.githubusercontent.com/solarpush/region-to-share/main/images/screenshots/screenshot-1.png
+			</image>
+		</screenshot>
+		<screenshot>
+			<caption>
+				Region to Share in action
+			</caption>
+			<image>
+				https://raw.githubusercontent.com/solarpush/region-to-share/main/images/screenshots/screenshot-2.png
+			</image>
+		</screenshot>
+		<screenshot>
+			<caption>
+				Region to Share in action
+			</caption>
+			<image>
+				https://raw.githubusercontent.com/solarpush/region-to-share/main/images/screenshots/screenshot-3.png
+			</image>
+		</screenshot>
+		<screenshot>
+			<caption>
+				Region to Share in action
+			</caption>
+			<image>
+				https://raw.githubusercontent.com/solarpush/region-to-share/main/images/screenshots/screenshot-4.png
+			</image>
+		</screenshot>
+		<screenshot>
+			<caption>
+				Region to Share in action
+			</caption>
+			<image>
+				https://raw.githubusercontent.com/solarpush/region-to-share/main/images/screenshots/screenshot-5.png
+			</image>
+		</screenshot>
+		<screenshot>
+			<caption>
+				Region to Share in action
+			</caption>
+			<image>
+				https://raw.githubusercontent.com/solarpush/region-to-share/main/images/screenshots/screenshot-6.png
+			</image>
+		</screenshot>
+		<screenshot>
+			<caption>
+				Region to Share in action
+			</caption>
+			<image>
+				https://raw.githubusercontent.com/solarpush/region-to-share/main/images/screenshots/screenshot-7.png
+			</image>
+		</screenshot>
+		<screenshot>
+			<caption>
+				Region to Share in action
+			</caption>
+			<image>
+				https://raw.githubusercontent.com/solarpush/region-to-share/main/images/screenshots/screenshot-8.png
+			</image>
+		</screenshot>
+		<screenshot>
+			<caption>
+				Region to Share in action
+			</caption>
+			<image>
+				https://raw.githubusercontent.com/solarpush/region-to-share/main/images/screenshots/screenshot-9.png
+			</image>
+		</screenshot>
+	</screenshots>
+	<releases>
+		<release version="2.0.0-beta2" date="2025-10-01">
+			<description>
+				<p>
+					Version 2.0 Beta — Complete Rust rewrite.
+				</p>
+				<ul>
+					<li>
+						Native Rust implementation (no Python dependencies)
+					</li>
+					<li>
+						Lower CPU usage
+					</li>
+					<li>
+						Native Wayland support via XDG Desktop Portal
+					</li>
+					<li>
+						Native X11 support
+					</li>
+					<li>
+						Modern egui interface
+					</li>
+					<li>
+						Smaller binary size
+					</li>
+				</ul>
+			</description>
+		</release>
+	</releases>
+	<content_rating type="oars-1.1" />
+	<keywords>
+		<keyword>
+			screen
+		</keyword>
+		<keyword>
+			share
+		</keyword>
+		<keyword>
+			region
+		</keyword>
+		<keyword>
+			capture
+		</keyword>
+		<keyword>
+			video
+		</keyword>
+		<keyword>
+			conference
+		</keyword>
+		<keyword>
+			ultrawide
+		</keyword>
+		<keyword>
+			widescreen
+		</keyword>
+		<keyword>
+			zoom
+		</keyword>
+		<keyword>
+			teams
+		</keyword>
+		<keyword>
+			discord
+		</keyword>
+		<keyword>
+			google-meet
+		</keyword>
+	</keywords>
+	<categories>
+		<category>
+			Utility
+		</category>
+		<category>
+			Graphics
+		</category>
+		<category>
+			Network
+		</category>
+	</categories>
+	<provides>
+		<binary>
+			region-to-share
+		</binary>
+	</provides>
+	<recommends>
+		<display_length compare="ge">
+			768
+		</display_length>
+	</recommends>
+	<supports>
+		<control>
+			pointing
+		</control>
+		<control>
+			keyboard
+		</control>
+	</supports>
+</component>

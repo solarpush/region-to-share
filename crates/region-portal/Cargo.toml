@@ -17,12 +17,8 @@ ashpd = { workspace = true }
 pipewire = { workspace = true }
 libspa = { workspace = true }
 crossbeam-channel = "0.5"
-libc = "0.2"
 log = "0.4"
-
-# EGL/OpenGL for DmaBuf import
-khronos-egl = { version = "6.0", features = ["dynamic"] }
-gl = "0.14"
+libc = "0.2"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
