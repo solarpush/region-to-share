@@ -151,6 +151,8 @@ parts:
       - libfreetype6
       - fonts-dejavu-core
       - adwaita-icon-theme
+      # Locale data (needed for proper locale detection in strict confinement)
+      - locales
     override-build: |
       craftctl default
       
@@ -209,6 +211,13 @@ parts:
       
       # XDG runtime dir fallback (for X11 or if not set above)
       export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-$REAL_XDG_RUNTIME_DIR}"
+      
+      # Locale - forward host locale so the app detects fr/en correctly
+      # Snap strict confinement can reset LANG to C or C.UTF-8
+      export LANG="${LANG:-C.UTF-8}"
+      export LANGUAGE="${LANGUAGE:-}"
+      export LC_ALL="${LC_ALL:-}"
+      export LC_MESSAGES="${LC_MESSAGES:-}"
       
       # XKB keyboard configuration - use snap's data or fallback to host
       if [ -d "$SNAP/usr/share/X11/xkb" ]; then
