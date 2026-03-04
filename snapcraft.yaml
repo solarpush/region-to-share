@@ -56,14 +56,10 @@ apps:
       - hardware-observe
       - screen-inhibit-control
       - home
-      - network
       - unity7
       - gsettings
 
     environment:
-      # OpenGL - use host drivers
-      LIBGL_DRIVERS_PATH: "/usr/lib/x86_64-linux-gnu/dri:$SNAP/usr/lib/x86_64-linux-gnu/dri"
-      __EGL_VENDOR_LIBRARY_DIRS: "/usr/share/glvnd/egl_vendor.d:$SNAP/usr/share/glvnd/egl_vendor.d"
       XCURSOR_PATH: $SNAP/usr/share/icons
       XCURSOR_THEME: "Adwaita"
       XDG_DATA_DIRS: "$SNAP/usr/share:$XDG_DATA_DIRS"

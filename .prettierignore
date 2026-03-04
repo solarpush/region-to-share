@@ -1,0 +1,2 @@
+# AppStream metainfo - appstreamcli requires inline tag values, no whitespace
+*.metainfo.xml
