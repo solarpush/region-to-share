@@ -26,8 +26,8 @@ settings:
   region: "📍 Région"
   remember_region: "Se souvenir de la dernière région"
   auto_use_region: "Utiliser automatiquement la dernière région au démarrage"
-  global_shortcut: "Raccourci global :"
-  shortcut_hint: "(Ex : Meta+Ctrl+W pour activer/désactiver la capture)"
+  global_shortcut: "Raccourci global"
+  shortcut_hint: "Ajoutez ce raccourci dans votre DE (GNOME, KDE, Sway…) avec la commande :"
   language: "Langue :"
   lang_auto: "Automatique (système)"
 

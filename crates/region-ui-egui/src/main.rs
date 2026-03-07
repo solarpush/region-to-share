@@ -5,6 +5,8 @@ use region_capture::{CaptureBackend, AutoBackend};
 use region_portal::PortalBackend;
 use region_config::Config;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::path::PathBuf;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::sync::Mutex as TokioMutex;
 use std::sync::Mutex as StdMutex;
@@ -35,6 +37,49 @@ struct Args {
 fn is_wayland() -> bool {
     std::env::var("WAYLAND_DISPLAY").is_ok() 
         || std::env::var("XDG_SESSION_TYPE").map(|t| t == "wayland").unwrap_or(false)
+}
+
+/// Path of the Unix socket used for single-instance detection.
+fn get_socket_path() -> PathBuf {
+    let dir = std::env::var("XDG_RUNTIME_DIR")
+        .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().into_owned());
+    PathBuf::from(dir).join("region-to-share.sock")
+}
+
+/// Try to signal an already-running instance to raise itself.
+/// Returns true if another instance was contacted.
+fn try_raise_existing() -> bool {
+    use std::os::unix::net::UnixStream;
+    use std::io::Write;
+    let path = get_socket_path();
+    if let Ok(mut stream) = UnixStream::connect(&path) {
+        let _ = stream.write_all(b"raise");
+        return true;
+    }
+    false
+}
+
+/// Spawn a background thread that listens on the Unix socket and sets
+/// `flag` to true whenever a "raise" message is received.
+fn spawn_instance_listener(flag: Arc<AtomicBool>, ctx_tx: std::sync::mpsc::SyncSender<()>) {
+    use std::os::unix::net::UnixListener;
+    use std::io::Read;
+    let path = get_socket_path();
+    let _ = std::fs::remove_file(&path);
+    std::thread::spawn(move || {
+        let listener = match UnixListener::bind(&path) {
+            Ok(l) => l,
+            Err(e) => { log::warn!("[SingleInstance] Cannot bind socket: {}", e); return; }
+        };
+        for stream in listener.incoming() {
+            if let Ok(mut s) = stream {
+                let mut buf = [0u8; 16];
+                let _ = s.read(&mut buf);
+                flag.store(true, Ordering::Relaxed);
+                let _ = ctx_tx.try_send(());
+            }
+        }
+    });
 }
 
 fn main() -> Result<(), eframe::Error> {
@@ -91,7 +136,18 @@ fn main() -> Result<(), eframe::Error> {
     info!("Region to Share v{}", env!("CARGO_PKG_VERSION"));
     debug!("Debug logging enabled");
     debug!("Session type: {}", if is_wayland() { "Wayland" } else { "X11" });
-    
+
+    // ── Single-instance guard ──────────────────────────────────────────────
+    if try_raise_existing() {
+        info!("[SingleInstance] Another instance is running, raising it.");
+        return Ok(());
+    }
+    let raise_flag = Arc::new(AtomicBool::new(false));
+    // Canal léger pour déclencher request_repaint() depuis le thread socket
+    let (ctx_tx, ctx_rx) = std::sync::mpsc::sync_channel::<()>(1);
+    spawn_instance_listener(raise_flag.clone(), ctx_tx);
+    // ──────────────────────────────────────────────────────────────────────
+
     let runtime = tokio::runtime::Runtime::new().unwrap();
 
     let options = eframe::NativeOptions {
@@ -106,8 +162,15 @@ fn main() -> Result<(), eframe::Error> {
     eframe::run_native(
         "Region to Share",
         options,
-        Box::new(move |_cc| {
-            Ok(Box::new(RegionApp::new(runtime, config)))
+        Box::new(move |cc| {
+            // Câbler request_repaint pour que le thread socket réveille eframe
+            let egui_ctx = cc.egui_ctx.clone();
+            std::thread::spawn(move || {
+                while ctx_rx.recv().is_ok() {
+                    egui_ctx.request_repaint();
+                }
+            });
+            Ok(Box::new(RegionApp::new(runtime, config, raise_flag)))
         }),
     )
 }
@@ -150,6 +213,8 @@ struct RegionApp {
     cpu_usage: f64,
     memory_mb: f64,
     data_rate_mbps: f64,
+    /// Signalé à true par le thread socket quand une seconde instance démarre.
+    raise_flag: Arc<AtomicBool>,
 }
 
 #[derive(Clone)]
@@ -177,10 +242,12 @@ enum StatsUpdate {
     /// en cas de fractional scaling). Pour X11, c'est la résolution physique.
     ScreenSize(u32, u32),
     Stopped,
+    /// L'utilisateur a annulé la demande d'accès au portail
+    Cancelled,
 }
 
 impl RegionApp {
-    fn new(runtime: tokio::runtime::Runtime, config: Config) -> Self {
+    fn new(runtime: tokio::runtime::Runtime, config: Config, raise_flag: Arc<AtomicBool>) -> Self {
         let (_tx, rx) = mpsc::unbounded_channel();
         
         // Charger la dernière région si disponible
@@ -230,6 +297,7 @@ impl RegionApp {
             cpu_usage: 0.0,
             memory_mb: 0.0,
             data_rate_mbps: 0.0,
+            raise_flag,
         }
     }
     
@@ -237,6 +305,18 @@ impl RegionApp {
     fn is_wayland() -> bool {
         std::env::var("WAYLAND_DISPLAY").is_ok() 
             || std::env::var("XDG_SESSION_TYPE").map(|t| t == "wayland").unwrap_or(false)
+    }
+
+    /// Returns the correct shell command to launch this app,
+    /// depending on whether it is running as Flatpak, Snap, or native.
+    fn get_app_command() -> String {
+        if std::env::var("FLATPAK_ID").is_ok() {
+            "flatpak run io.github.solarpush.RegionToShare".to_string()
+        } else if std::env::var("SNAP").is_ok() {
+            "region-to-share".to_string()
+        } else {
+            "region-to-share".to_string()
+        }
     }
     
     /// Lower window on X11 using x11rb directly (no external tools needed for snap).
@@ -359,7 +439,10 @@ impl RegionApp {
             
             // Initialize the backend with a full-screen region first (needed for Portal)
             let init_region = Rectangle::new(0, 0, 1920, 1080);
-            if backend.init(init_region).await.is_err() {
+            if let Err(e) = backend.init(init_region).await {
+                log::warn!("[UI] Portal init failed (user cancelled?): {:?}", e);
+                let _ = new_tx.send(StatsUpdate::Cancelled);
+                ctx_clone.request_repaint();
                 return;
             }
             
@@ -497,6 +580,11 @@ impl RegionApp {
     }
     
     fn process_updates(&mut self, ctx: &egui::Context) {
+        // Passer au premier plan si une seconde instance a tenté de démarrer
+        if self.raise_flag.swap(false, Ordering::Relaxed) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        }
+
         // Collecter les updates et ne garder que la dernière frame
         let mut last_frame: Option<FrameData> = None;
         let mut last_screenshot: Option<FrameData> = None;
@@ -527,6 +615,13 @@ impl RegionApp {
                     }
                     StatsUpdate::Stopped => {
                         self.capturing = false;
+                    }
+                    StatsUpdate::Cancelled => {
+                        // L'utilisateur a annulé le dialogue portail → retour à l'UI normale
+                        self.selecting_region = false;
+                        self.screenshot_texture = None;
+                        self.selection_ready = false;
+                        ctx.request_repaint();
                     }
                 }
             }
@@ -988,12 +1083,12 @@ impl eframe::App for RegionApp {
                             ui.label(egui::RichText::new("Max 60 Fps on Wayland").small());
                         });
                         
-                        ui.checkbox(&mut self.config.settings.show_performance, t!("settings.show_performance_short"));
+                        ui.checkbox(&mut self.config.settings.show_performance, t!("settings.show_performance_short")).on_hover_cursor(egui::CursorIcon::PointingHand);
                         
                         ui.separator();
                         
                         ui.horizontal(|ui| {
-                            if ui.button(t!("action.new_selection")).clicked() {
+                            if ui.button(t!("action.new_selection")).on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
                                 self.stop_capture();
                                 self.streaming_only = false;
                                 self.show_streaming_options = false;
@@ -1006,7 +1101,7 @@ impl eframe::App for RegionApp {
                                 self.start_region_selection(ctx);
                             }
                             
-                            if ui.button(t!("action.stop")).clicked() {
+                            if ui.button(t!("action.stop")).on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
                                 self.stop_capture();
                                 self.streaming_only = false;
                                 self.show_streaming_options = false;
@@ -1020,7 +1115,7 @@ impl eframe::App for RegionApp {
                         
                         ui.separator();
                         
-                        if ui.button(t!("action.close")).clicked() {
+                        if ui.button(t!("action.close")).on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
                             self.show_streaming_options = false;
                             if let Err(e) = self.config.save() {
                                 error!("[Config] Save error: {}", e);
@@ -1046,7 +1141,9 @@ impl eframe::App for RegionApp {
                 ui.add_space(30.0);
                 
                 // Bouton principal de sélection
-                if ui.add_sized([200.0, 50.0], egui::Button::new(format!("🖱 {}", t!("action.select_region")))).clicked() {
+                if ui.add_sized([200.0, 50.0], egui::Button::new(format!("🖱 {}", t!("action.select_region"))))
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                    .clicked() {
                     self.start_region_selection(ctx);
                 }
                 
@@ -1076,7 +1173,7 @@ impl eframe::App for RegionApp {
             ui.separator();
             
             // Paramètres (toujours visibles, compacts)
-            ui.collapsing(format!("⚙ {}", t!("settings.title")), |ui| {
+            let r_collapsing_settings = ui.collapsing(format!("⚙ {}", t!("settings.title")), |ui| {
                 egui::ScrollArea::both()
                     .show(ui, |ui| {
                 ui.horizontal(|ui| {
@@ -1091,25 +1188,19 @@ impl eframe::App for RegionApp {
                 });
                 ui.add_space(5.0);
                 ui.label(t!("settings.window"));
-                ui.horizontal(|ui| {
-                    ui.label(t!("settings.opacity"));
-                    let mut opacity = self.config.settings.window_opacity;
-                    if ui.add(egui::Slider::new(&mut opacity, 0.3..=1.0).show_value(true)).changed() {
-                        self.config.set_window_opacity(opacity);
-                    }
-                });
+                
                 
                 ui.checkbox(&mut self.config.settings.auto_send_to_background,
-                    t!("settings.send_to_background"));
+                    t!("settings.send_to_background")).on_hover_cursor(egui::CursorIcon::PointingHand);
                 
                 ui.add_space(5.0);
                 ui.label(t!("settings.region"));
-                ui.checkbox(&mut self.config.settings.remember_last_region, t!("settings.remember_region"));
+                ui.checkbox(&mut self.config.settings.remember_last_region, t!("settings.remember_region")).on_hover_cursor(egui::CursorIcon::PointingHand);
                 ui.checkbox(&mut self.config.settings.auto_use_specific_region,
-                    t!("settings.auto_use_region"));
+                    t!("settings.auto_use_region")).on_hover_cursor(egui::CursorIcon::PointingHand);
                 
                 ui.add_space(5.0);
-                ui.checkbox(&mut self.config.settings.show_performance, t!("settings.show_performance"));
+                ui.checkbox(&mut self.config.settings.show_performance, t!("settings.show_performance")).on_hover_cursor(egui::CursorIcon::PointingHand);
 
                 ui.add_space(5.0);
                 ui.label(t!("settings.language"));
@@ -1145,14 +1236,15 @@ impl eframe::App for RegionApp {
                 }
 
                 ui.add_space(5.0);
+                ui.label(t!("settings.global_shortcut"));
+                ui.label(egui::RichText::new(t!("settings.shortcut_hint")).small());
+                let app_cmd = Self::get_app_command();
                 ui.horizontal(|ui| {
-                    ui.label(t!("settings.global_shortcut"));
-                    let mut shortcut = self.config.settings.global_shortcut.clone();
-                    if ui.text_edit_singleline(&mut shortcut).changed() {
-                        self.config.settings.global_shortcut = shortcut;
+                    ui.label(egui::RichText::new(&app_cmd).monospace().small());
+                    if ui.small_button("📋").on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                        ctx.output_mut(|o| o.copied_text = app_cmd.clone());
                     }
                 });
-                ui.label(t!("settings.shortcut_hint"));
                 
                 ui.add_space(10.0);
                 if ui.button(t!("action.save")).clicked() {
@@ -1162,13 +1254,13 @@ impl eframe::App for RegionApp {
                 }
                 }); // end ScrollArea
             });
+            r_collapsing_settings.header_response.on_hover_cursor(egui::CursorIcon::PointingHand);
             
             ui.add_space(10.0);
             ui.vertical_centered(|ui| {
                 ui.label(t!("main.streaming_hint"));
             });
         });
-        
         if self.capturing {
             ctx.request_repaint();
         }

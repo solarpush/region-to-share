@@ -37,7 +37,6 @@ build-options:
   env:
     CARGO_HOME: /run/build/cargo-home
     RUST_BACKTRACE: '1'
-    # libclang pour bindgen (crate pipewire)
     LIBCLANG_PATH: /usr/lib/sdk/llvm20/lib
     BINDGEN_EXTRA_CLANG_ARGS: >-
       -I/usr/lib/sdk/llvm20/include
@@ -66,8 +65,7 @@ modules:
           -I/usr/include
 
     build-commands:
-      # ── Config vendor (CARGO_HOME override empêche la lecture du .cargo/config
-      #    généré par flatpak-cargo-generator → on le recrée explicitement)
+      # ── Config vendor ────────────────────────────────────────────────────────
       - mkdir -p .cargo
       - |
         cat > .cargo/config.toml << 'EOF'
@@ -107,45 +105,17 @@ modules:
       - install -Dm644 images/region-to-share.svg
           /app/share/icons/hicolor/scalable/apps/io.github.solarpush.RegionToShare.svg
 
-      # ── AppStream metadata (obligatoire Flathub) ─────────────────────────────
+      # ── AppStream metadata ───────────────────────────────────────────────────
       - install -Dm644 io.github.solarpush.RegionToShare.metainfo.xml
           /app/share/metainfo/io.github.solarpush.RegionToShare.metainfo.xml
 
     sources:
-      # ── Source principale (tag stable requis pour Flathub) ───────────────────
-      # Mettre à jour tag + commit avant soumission :
-      #   git tag v2.0.0 && git push --tags
-      - type: git
-        url: https://github.com/solarpush/region-to-share
-        tag: v2.0.0
-        commit: REPLACE_WITH_FULL_COMMIT_SHA
-
-      # Crates Cargo vendorisés (générer avec flatpak-cargo-generator)
+      - type: dir
+        path: .
       - cargo-sources.json
 
 # ─────────────────────────────────────────────────────────────────────────────
-# COMMANDES UTILES
-# ─────────────────────────────────────────────────────────────────────────────
-#
-# 1. Installer les dépendances flatpak :
-#    flatpak install flathub \
-#      org.freedesktop.Platform//25.08 \
-#      org.freedesktop.Sdk//25.08 \
-#      org.freedesktop.Sdk.Extension.rust-stable//25.08 \
-#      org.freedesktop.Sdk.Extension.llvm20//25.08
-#
-# 2. Générer cargo-sources.json (une seule fois, ou après mise à jour Cargo.lock) :
-#    uv tool install flatpak-cargo-generator
-#    flatpak-cargo-generator Cargo.lock -o cargo-sources.json
-#
-# 3. Build local (test) :
-#    flatpak-builder --force-clean --user --install build-flatpak \
-#      io.github.solarpush.RegionToShare.yml
-#
-# 4. Lancer l'app installée :
-#    flatpak run io.github.solarpush.RegionToShare
-#
-# 5. Build rapide sans install (debug) :
-#    flatpak-builder --force-clean build-flatpak \
-#      io.github.solarpush.RegionToShare.yml
+# BUILD LOCAL :
+#   flatpak-builder --force-clean --user --install build-flatpak \
+#     io.github.solarpush.RegionToShare.local.yml
 # ─────────────────────────────────────────────────────────────────────────────
