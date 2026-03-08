@@ -18,9 +18,6 @@ finish-args:
   - --share=ipc               # Mémoire partagée X11 (MIT-SHM)
   # ── GPU / DMA-BUF ──────────────────────────────────────────────────────────
   - --device=dri
-  # ── D-Bus session (XDG Portal) ─────────────────────────────────────────────
-  - --talk-name=org.freedesktop.portal.Desktop
-  - --talk-name=org.freedesktop.portal.ScreenCast
   # ── PipeWire (capture Wayland) ─────────────────────────────────────────────
   - --filesystem=xdg-run/pipewire-0
   # ── Curseurs Wayland ──────────────────────────────────────────────────────

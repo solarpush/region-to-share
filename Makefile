@@ -12,11 +12,14 @@ help: ## Affiche cette aide
 # ── Dépendances ────────────────────────────────────────────────────────────────
 
 deps: ## Installe le SDK Flatpak + extensions (à faire une seule fois)
+	@# Ajoute le remote flathub user si absent
+	flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo || true
 	flatpak install --user -y flathub \
 		org.freedesktop.Platform//25.08 \
 		org.freedesktop.Sdk//25.08 \
 		org.freedesktop.Sdk.Extension.rust-stable//25.08 \
-		org.freedesktop.Sdk.Extension.llvm20//25.08
+		org.freedesktop.Sdk.Extension.llvm20//25.08 \
+		org.flatpak.Builder
 
 cargo-sources: ## Régénère cargo-sources.json depuis Cargo.lock
 	flatpak-cargo-generator Cargo.lock -o cargo-sources.json
@@ -48,9 +51,11 @@ run-build: build ## Lance directement depuis le builddir local (sans installer)
 validate: ## Valide le fichier metainfo avec appstreamcli
 	appstreamcli validate --pedantic $(APP_ID).metainfo.xml
 
-lint: ## Vérifie les deux manifests avec flatpak-builder
-	flatpak-builder --dry-run /tmp/$(APP_ID)-lint-local $(MANIFEST_LOCAL)
-	flatpak-builder --dry-run /tmp/$(APP_ID)-lint-deploy $(MANIFEST_DEPLOY)
+lint: ## Vérifie le manifest de déploiement avec flatpak-builder-lint (Flathub)
+	flatpak run --command=flatpak-builder-lint org.flatpak.Builder manifest $(MANIFEST_DEPLOY)
+
+lint-local: ## Vérifie le manifest local (filename-mismatch attendu)
+	flatpak run --command=flatpak-builder-lint org.flatpak.Builder manifest $(MANIFEST_LOCAL)
 
 # ── Nettoyage ──────────────────────────────────────────────────────────────────
 
