@@ -215,6 +215,9 @@ struct RegionApp {
     data_rate_mbps: f64,
     /// Signalé à true par le thread socket quand une seconde instance démarre.
     raise_flag: Arc<AtomicBool>,
+    /// Compteur de frames en attente dans le canal StatsUpdate, partagé avec
+    /// la capture task. Limite l'accumulation quand l'UI ne drain pas (minimisée).
+    pending_frames: Arc<std::sync::atomic::AtomicU32>,
 }
 
 #[derive(Clone)]
@@ -298,6 +301,7 @@ impl RegionApp {
             memory_mb: 0.0,
             data_rate_mbps: 0.0,
             raise_flag,
+            pending_frames: Arc::new(std::sync::atomic::AtomicU32::new(0)),
         }
     }
     
@@ -388,12 +392,14 @@ impl RegionApp {
         
         let runtime = self.runtime.clone();
         let portal_backend_arc = self.portal_backend.clone();
+        let pending_frames = self.pending_frames.clone();
+        pending_frames.store(0, Ordering::Relaxed);
         
         runtime.spawn(async move {
             // Récupérer le backend Portal existant s'il y en a un
             let existing_backend = portal_backend_arc.lock().await.take();
             
-            if let Err(e) = capture_task_continuous(region, frame_rate, new_tx, stop_rx, existing_backend).await {
+            if let Err(e) = capture_task_continuous(region, frame_rate, new_tx, stop_rx, existing_backend, pending_frames).await {
                 error!("[Capture] Error: {}", e);
             }
         });
@@ -604,6 +610,10 @@ impl RegionApp {
                     }
                     StatsUpdate::Frame(frame_data) => {
                         // Garder seulement la dernière frame (skip les anciennes)
+                        if last_frame.is_some() {
+                            // On drop une frame déjà comptée → décrémenter
+                            self.pending_frames.fetch_sub(1, Ordering::Relaxed);
+                        }
                         last_frame = Some(frame_data);
                     }
                     StatsUpdate::Screenshot(frame_data) => {
@@ -629,13 +639,21 @@ impl RegionApp {
         
         // Traiter seulement la dernière frame (optimisation majeure)
         if let Some(frame_data) = last_frame {
+            self.pending_frames.fetch_sub(1, Ordering::Relaxed);
             if let Ok(image) = self.frame_to_image(&frame_data) {
-                // Réutiliser la texture si possible, sinon en créer une nouvelle
-                self.texture = Some(ctx.load_texture(
-                    "capture",
-                    image,
-                    egui::TextureOptions::NEAREST, // Plus rapide que LINEAR
-                ));
+                // Réutiliser la texture existante (set) au lieu d'en allouer une
+                // nouvelle (load_texture) à chaque frame. load_texture incrémente
+                // next_id et empile des ImageDelta dans le delta-set, ce qui fait
+                // grimper la RAM en continu.
+                if let Some(tex) = self.texture.as_mut() {
+                    tex.set(image, egui::TextureOptions::NEAREST);
+                } else {
+                    self.texture = Some(ctx.load_texture(
+                        "capture",
+                        image,
+                        egui::TextureOptions::NEAREST,
+                    ));
+                }
             }
         }
         
@@ -1273,6 +1291,7 @@ async fn capture_task_continuous(
     tx: UnboundedSender<StatsUpdate>,
     mut stop_rx: UnboundedReceiver<()>,
     existing_backend: Option<Box<dyn CaptureBackend>>,
+    pending_frames: Arc<std::sync::atomic::AtomicU32>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Valider la région avant de commencer
     let region = Rectangle {
@@ -1312,6 +1331,8 @@ async fn capture_task_continuous(
     
     // Variable pour tracker la dernière frame envoyée
     let mut last_sequence = 0u64;
+    
+    const MAX_PENDING_FRAMES: u32 = 2;
     
     loop {
         let frame_start = std::time::Instant::now();
@@ -1381,14 +1402,18 @@ async fn capture_task_continuous(
         }
         
         // Envoyer la frame via Arc (zero-copy)
-        if let Some(arc_buffer) = frame.data.as_arc_buffer() {
-            let frame_data = FrameData {
-                width: frame.width,
-                height: frame.height,
-                data: arc_buffer,
-                format: frame.format,
-            };
-            let _ = tx.send(StatsUpdate::Frame(frame_data));
+        // Skip si le consommateur a trop de frames en attente (fenêtre minimisée, etc.)
+        if pending_frames.load(Ordering::Relaxed) < MAX_PENDING_FRAMES {
+            if let Some(arc_buffer) = frame.data.as_arc_buffer() {
+                let frame_data = FrameData {
+                    width: frame.width,
+                    height: frame.height,
+                    data: arc_buffer,
+                    format: frame.format,
+                };
+                pending_frames.fetch_add(1, Ordering::Relaxed);
+                let _ = tx.send(StatsUpdate::Frame(frame_data));
+            }
         }
         
         // Frame pacing intelligent
@@ -1403,6 +1428,12 @@ async fn capture_task_continuous(
                 }
             }
         }
+    }
+    
+    // Nettoyage propre du backend (arrête le thread PipeWire, libère les
+    // ressources portal, etc.)
+    if let Err(e) = backend.stop().await {
+        error!("[Capture] Backend stop error: {}", e);
     }
     
     Ok(())
@@ -1458,16 +1489,8 @@ impl ResourceMonitor {
     }
     
     fn get_num_cpus() -> usize {
-        // Lire le nombre de CPUs depuis /proc/cpuinfo
-        if let Ok(cpuinfo) = fs::read_to_string("/proc/cpuinfo") {
-            let count = cpuinfo.lines()
-                .filter(|line| line.starts_with("processor"))
-                .count();
-            if count > 0 {
-                return count;
-            }
-        }
-        // Fallback: utiliser std::thread
+       
+        // Lire le nombre de CPUs depuis std::thread
         std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(1)

@@ -6,11 +6,27 @@ use region_capture::{CaptureError, Frame, FrameData, Result};
 use region_core::{Rectangle, PixelFormat};
 use std::sync::Arc;
 use std::time::Instant;
-use crossbeam_channel::{self as channel, Receiver, Sender};  // Thread-safe and Sync
-use tokio::sync::mpsc as tokio_mpsc;  // Keep for stop signal
+use crossbeam_channel::{self as channel, Receiver, Sender};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use log::{debug, trace, error, info};
+
+/// Thread-safe handle to quit a PipeWire mainloop from any thread.
+///
+/// `pw_main_loop_quit` is documented as thread-safe in the PipeWire C API,
+/// so sending the raw pointer across threads is safe for this specific call.
+struct MainLoopQuitHandle {
+    ptr: *mut pipewire::sys::pw_main_loop,
+}
+
+unsafe impl Send for MainLoopQuitHandle {}
+unsafe impl Sync for MainLoopQuitHandle {}
+
+impl MainLoopQuitHandle {
+    fn quit(&self) {
+        unsafe { pipewire::sys::pw_main_loop_quit(self.ptr) };
+    }
+}
 
 /// PipeWire stream state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,8 +52,9 @@ pub struct PipeWireFrame {
 pub struct PipeWireStream {
     node_id: u32,
     state: Arc<AtomicU64>, // 0=disconnected, 1=connecting, 2=paused, 3=streaming, 4=error
-    frame_rx: Receiver<PipeWireFrame>,  // crossbeam-channel for thread-safe Sync
-    stop_tx: Option<tokio_mpsc::UnboundedSender<()>>,
+    frame_rx: Receiver<PipeWireFrame>,
+    quit_handle: Option<MainLoopQuitHandle>,
+    thread_handle: Option<thread::JoinHandle<()>>,
     sequence: u64,
     stream_width: u32,
     stream_height: u32,
@@ -57,13 +74,13 @@ impl PipeWireStream {
         // dans un canal illimité → ~1 Go de RAM au bout de quelques secondes.
         // 4 frames ≈ 64 Mo max en tampon, marge suffisante pour absorber un pic.
         let (frame_tx, frame_rx) = channel::bounded(4);
-        let (stop_tx, mut stop_rx) = tokio_mpsc::unbounded_channel();
+        let (quit_tx, quit_rx) = channel::bounded::<MainLoopQuitHandle>(1);
         
         let state_clone = state.clone();
         
         // Spawn PipeWire thread (PipeWire requires its own thread)
-        thread::spawn(move || {
-            if let Err(e) = run_pipewire_loop_with_fd(node_id, pipewire_fd, frame_tx, &mut stop_rx, state_clone) {
+        let thread_handle = thread::spawn(move || {
+            if let Err(e) = run_pipewire_loop_with_fd(node_id, pipewire_fd, frame_tx, quit_tx, state_clone) {
                 error!("[PipeWire] Thread error: {}", e);
             }
         });
@@ -88,11 +105,15 @@ impl PipeWireStream {
         // Give a bit more time for first frame to arrive
         tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
         
+        // Récupérer le quit handle envoyé par le thread PipeWire
+        let quit_handle = quit_rx.try_recv().ok();
+        
         Ok(Self {
             node_id,
             state,
             frame_rx,
-            stop_tx: Some(stop_tx),
+            quit_handle,
+            thread_handle: Some(thread_handle),
             sequence: 0,
             stream_width: 1920,
             stream_height: 1080,
@@ -226,11 +247,29 @@ impl PipeWireStream {
 
     /// Disconnect from the stream.
     pub async fn disconnect(&mut self) -> Result<()> {
-        if let Some(tx) = self.stop_tx.take() {
-            let _ = tx.send(());
+        if let Some(handle) = self.quit_handle.take() {
+            handle.quit();
+        }
+        if let Some(th) = self.thread_handle.take() {
+            // Attendre que le thread PipeWire se termine (max 2 s)
+            let _ = tokio::task::spawn_blocking(move || {
+                let _ = th.join();
+            })
+            .await;
         }
         self.state.store(0, Ordering::Relaxed);
         Ok(())
+    }
+}
+
+impl Drop for PipeWireStream {
+    fn drop(&mut self) {
+        if let Some(handle) = self.quit_handle.take() {
+            handle.quit();
+        }
+        if let Some(th) = self.thread_handle.take() {
+            let _ = th.join();
+        }
     }
 }
 
@@ -376,7 +415,7 @@ fn run_pipewire_loop_with_fd(
     node_id: u32,
     pipewire_fd: i32,
     frame_tx: Sender<PipeWireFrame>,
-    _stop_rx: &mut tokio_mpsc::UnboundedReceiver<()>,
+    quit_tx: Sender<MainLoopQuitHandle>,
     state: Arc<AtomicU64>,
 ) -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
     use pipewire as pw;
@@ -385,6 +424,10 @@ fn run_pipewire_loop_with_fd(
     pw::init();
 
     let mainloop = pw::main_loop::MainLoopBox::new(None)?;
+
+    // Envoyer le quit handle au thread principal AVANT de bloquer sur run()
+    let _ = quit_tx.send(MainLoopQuitHandle { ptr: mainloop.as_raw_ptr() });
+
     let context = pw::context::ContextBox::new(&mainloop.loop_(), None)?;
 
     let core = if pipewire_fd >= 0 {

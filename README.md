@@ -188,14 +188,6 @@ region-to-share --verbose
 - Ensure you have the XShm extension enabled
 - Check that your X server allows shared memory
 
-**Snap: Permission issues**
-
-- The snap auto-connects required interfaces, but you can manually connect:
-  ```bash
-  snap connect region-to-share:pipewire
-  snap connect region-to-share:screencast-legacy
-  ```
-
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.

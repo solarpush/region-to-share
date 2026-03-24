@@ -6,6 +6,7 @@ use region_capture::{CaptureBackend, Capabilities, CaptureError, Frame, Result};
 use region_core::{Rectangle, PixelFormat};
 use async_trait::async_trait;
 use log::{debug, info, trace, warn};
+use std::os::fd::AsRawFd;
 
 /// Portal-based capture backend for Wayland using PipeWire/DmaBuf.
 pub struct PortalBackend {
@@ -132,15 +133,20 @@ impl CaptureBackend for PortalBackend {
         self.portal_reported_size = Some((stream_info.width, stream_info.height));
         self.node_id = Some(stream_info.node_id);
 
-        // Get PipeWire fd from portal
-        let pipewire_fd = portal.pipewire_fd()
+        // Get PipeWire fd from portal — take_pipewire_fd() consomme le fd pour
+        // éviter un double-close (OwnedFd dans PortalCapture + from_raw_fd dans
+        // le thread PipeWire).
+        let pipewire_owned_fd = portal.take_pipewire_fd()
             .ok_or_else(|| CaptureError::InitFailed("No PipeWire fd from portal".to_string()))?;
+        let pipewire_fd = pipewire_owned_fd.as_raw_fd();
 
         debug!("[PortalBackend] Got PipeWire fd: {}", pipewire_fd);
 
         // Connect to PipeWire stream using portal's fd
         debug!("[PortalBackend] Connecting to PipeWire node {}...", stream_info.node_id);
-        let  mut pw_stream = PipeWireStream::connect_with_fd(stream_info.node_id, pipewire_fd).await
+        // Oublier le OwnedFd car PipeWireStream en prend possession via from_raw_fd
+        std::mem::forget(pipewire_owned_fd);
+        let mut pw_stream = PipeWireStream::connect_with_fd(stream_info.node_id, pipewire_fd).await
             .map_err(|e| CaptureError::InitFailed(format!("PipeWire connect failed: {}", e)))?;
 
         debug!("[PortalBackend] PipeWire connected, waiting for frames...");
