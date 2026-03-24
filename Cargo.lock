@@ -3094,7 +3094,7 @@ checksum = "7a2d987857b319362043e95f5353c0535c1f58eec5336fdfcf626430af7def58"
 
 [[package]]
 name = "region-capture"
-version = "2.0.0"
+version = "2.1.1"
 dependencies = [
  "async-trait",
  "libc",
@@ -3109,7 +3109,7 @@ dependencies = [
 
 [[package]]
 name = "region-config"
-version = "2.0.0"
+version = "2.1.1"
 dependencies = [
  "dirs",
  "log",
@@ -3119,7 +3119,7 @@ dependencies = [
 
 [[package]]
 name = "region-core"
-version = "2.0.0"
+version = "2.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -3128,7 +3128,7 @@ dependencies = [
 
 [[package]]
 name = "region-portal"
-version = "2.0.0"
+version = "2.1.1"
 dependencies = [
  "ashpd",
  "async-trait",
@@ -3145,7 +3145,7 @@ dependencies = [
 
 [[package]]
 name = "region-ui-egui"
-version = "2.0.0"
+version = "2.1.1"
 dependencies = [
  "clap",
  "crossbeam-channel",

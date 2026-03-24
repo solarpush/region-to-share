@@ -1489,16 +1489,8 @@ impl ResourceMonitor {
     }
     
     fn get_num_cpus() -> usize {
-        // Lire le nombre de CPUs depuis /proc/cpuinfo
-        if let Ok(cpuinfo) = fs::read_to_string("/proc/cpuinfo") {
-            let count = cpuinfo.lines()
-                .filter(|line| line.starts_with("processor"))
-                .count();
-            if count > 0 {
-                return count;
-            }
-        }
-        // Fallback: utiliser std::thread
+       
+        // Lire le nombre de CPUs depuis std::thread
         std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(1)
