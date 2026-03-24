@@ -27,12 +27,10 @@ pub struct Settings {
     pub frame_rate: u32,
     pub capture_mode: String,
     pub show_performance: bool,
-    pub window_opacity: f32,
     pub auto_send_to_background: bool,
     pub remember_last_region: bool,
     pub auto_use_specific_region: bool,
     pub last_region: LastRegion,
-    pub global_shortcut: String,
     /// Language override. Empty string = auto-detect from environment.
     #[serde(default)]
     pub language: String,
@@ -44,12 +42,10 @@ impl Default for Settings {
             frame_rate: 60,
             capture_mode: "auto".to_string(),
             show_performance: false,
-            window_opacity: 1.0,
             auto_send_to_background: false,
             remember_last_region: false,
             auto_use_specific_region: false,
             last_region: LastRegion::default(),
-            global_shortcut: String::new(),
             language: String::new(),
         }
     }
@@ -116,14 +112,6 @@ impl Config {
     
     pub fn set_frame_rate(&mut self, frame_rate: u32) {
         self.settings.frame_rate = frame_rate;
-    }
-    
-    pub fn get_window_opacity(&self) -> f32 {
-        self.settings.window_opacity
-    }
-    
-    pub fn set_window_opacity(&mut self, opacity: f32) {
-        self.settings.window_opacity = opacity.clamp(0.0, 1.0);
     }
     
     pub fn get_last_region(&self) -> Option<LastRegion> {
