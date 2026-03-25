@@ -2,180 +2,190 @@
 
 This application requires certain system-level packages for full functionality.
 
-## Current Application Features (v1.0.8)
+> **Note**: Since v2.0.0, region-to-share is a **pure Rust application**. There are no Python dependencies.
+
+## Current Application (v2.1.1)
 
 ### Core Features
 
 - **Interactive screen region selection** with real-time preview
-- **High-performance capture** (up to 240 FPS with optimization)
-- **Multi-platform support**: Wayland (Portal/PipeWire) + X11 (MSS)
-- **Global keyboard shortcuts** (GNOME/gsettings integration)
-- **Advanced performance monitoring** with --perf flag
-- **Auto-background mode** for streamlined workflow
-- **Region memory** for quick reuse of last selected area
-- **Portal session sharing** (single authorization on Wayland)
+- **High-performance capture** via native Rust backends
+- **Wayland support** via XDG Desktop Portal + PipeWire
+- **X11 support** via x11rb + SHM (shared memory)
+- **Native egui/eframe UI** — no GTK/Qt dependency
+- **Performance monitoring overlay** (FPS, CPU, RAM)
+- **Auto-background mode** and region memory
 
-### Dependencies Overview
+### Runtime Dependencies (system packages)
 
-**Python Requirements** (see `requirements.txt`):
+The binary links against these libraries at runtime — they must be present on the host system.
 
-- PyQt5 >= 5.15.0 (GUI framework)
-- mss >= 10.0.0 (X11 screen capture)
-- dbus-python >= 1.3.0 (Wayland portal communication)
-- psutil >= 5.9.0 (system monitoring)
+#### Wayland (Portal/PipeWire)
 
-**System Dependencies** (install via package manager):
+| Library              | Purpose                                          |
+| -------------------- | ------------------------------------------------ |
+| `libpipewire-0.3`    | PipeWire client for screen capture               |
+| `libspa-0.2`         | SPA plugins used by PipeWire                     |
+| `libdbus-1`          | D-Bus for XDG Desktop Portal communication       |
+| `xdg-desktop-portal` | Portal backend (provided by the desktop session) |
 
-- **PyGObject/GI** (GStreamer integration) - Available via pip OR system packages
-- GStreamer + PipeWire plugin (Wayland capture)
-- D-Bus (portal communication)
-- Mesa/OpenGL (graphics acceleration)
+#### X11
+
+| Library      | Purpose                              |
+| ------------ | ------------------------------------ |
+| `libx11`     | Core X11                             |
+| `libxext`    | X11 extensions (SHM)                 |
+| `libxrandr`  | Multi-monitor / resolution detection |
+| `libxfixes`  | Cursor compositing                   |
+| `libxcursor` | Cursor themes                        |
+| `libxi`      | Input events                         |
+
+#### Graphics / Display
+
+| Library              | Purpose                            |
+| -------------------- | ---------------------------------- |
+| `libgl1` / `libegl1` | OpenGL / EGL for egui rendering    |
+| `libgbm1`            | Buffer management (DMA-Buf import) |
+| `libwayland-client`  | Wayland protocol (winit/eframe)    |
+| `libxkbcommon`       | Keyboard handling                  |
+
+#### Fonts
+
+| Library          | Purpose        |
+| ---------------- | -------------- |
+| `libfontconfig1` | Font discovery |
+| `libfreetype6`   | Font rendering |
+
+---
 
 ## Installation by Platform
 
-### PyGObject Installation Options
-
-**Option 1: Via pip** (newer, cross-platform):
+### Ubuntu / Debian
 
 ```bash
-pip install PyGObject
-```
-
-**Option 2: Via system package manager** (traditional, more stable):
-
-- **Ubuntu/Debian**: `sudo apt install python3-gi python3-gi-cairo`
-- **Fedora/RHEL**: `sudo dnf install python3-gobject python3-gobject-devel`
-- **Arch Linux**: `sudo pacman -S python-gobject`
-
-**Note**: System packages often provide better integration and stability, especially for GStreamer bindings.
-
-### Ubuntu/Debian (GNOME/Wayland)
-
-```bash
-sudo apt update
 sudo apt install -y \
-    python3-gi \
-    python3-gi-cairo \
-    gir1.2-gstreamer-1.0 \
-    gir1.2-gst-plugins-base-1.0 \
-    gstreamer1.0-plugins-good \
-    gstreamer1.0-plugins-bad \
-    gstreamer1.0-plugins-ugly \
-    gstreamer1.0-pipewire \
-    pipewire \
-    pipewire-pulse \
-    libdbus-1-dev \
-    pkg-config \
-    python3-dev
+  libpipewire-0.3-0 \
+  libspa-0.2-modules \
+  libdbus-1-3 \
+  xdg-desktop-portal \
+  libx11-6 libxext6 libxrandr2 libxfixes3 libxcursor1 libxi6 \
+  libegl1 libgl1 libgbm1 \
+  libwayland-client0 libxkbcommon0 \
+  libfontconfig1 libfreetype6
 ```
 
-### Fedora/RHEL
+### Fedora / RHEL
 
 ```bash
 sudo dnf install -y \
-    python3-gobject \
-    python3-gobject-devel \
-    gstreamer1-python \
-    gstreamer1-plugins-good \
-    gstreamer1-plugins-bad-free \
-    gstreamer1-plugins-ugly-free \
-    gstreamer1-plugin-pipewire \
-    pipewire \
-    pipewire-pulseaudio \
-    dbus-devel \
-    pkgconf-pkg-config \
-    python3-devel
+  pipewire-libs \
+  pipewire-gstreamer \
+  dbus-libs \
+  xdg-desktop-portal \
+  libX11 libXext libXrandr libXfixes libXcursor libXi \
+  mesa-libEGL mesa-libGL mesa-libgbm \
+  wayland-libs libxkbcommon \
+  fontconfig freetype
 ```
 
 ### Arch Linux
 
 ```bash
-sudo pacman -S \
-    python-gobject \
-    gstreamer \
-    gst-plugins-good \
-    gst-plugins-bad \
-    gst-plugins-ugly \
-    gst-plugin-pipewire \
-    pipewire \
-    pipewire-pulse \
-    dbus \
-    pkgconf \
-    python-devel
+sudo pacman -S --needed \
+  pipewire libspa \
+  dbus \
+  xdg-desktop-portal \
+  libx11 libxext libxrandr libxfixes libxcursor libxi \
+  mesa libxkbcommon \
+  wayland \
+  fontconfig freetype2
 ```
 
-## Snap Package Dependencies
+---
 
-The snap package (recommended installation) includes all dependencies:
+## Snap Package
+
+The snap bundles all runtime libraries — no system dependencies needed:
 
 ```bash
 sudo snap install region-to-share
+# or beta channel:
+sudo snap install region-to-share --channel=beta
 ```
 
-**Snap Architecture** (from `snapcraft.yaml`):
+**Snap configuration** (`snapcraft.yaml`):
 
-- **Base**: core22 (Ubuntu 22.04 LTS)
-- **Confinement**: strict with essential plugs
-- **Plugs**: desktop, wayland, x11, gsettings, process-control
-- **Bundled**: PyQt5, GStreamer, PipeWire, all Python deps
+- **Base**: core24 (Ubuntu 24.04 LTS)
+- **Confinement**: strict
+- **Plugs**: `desktop`, `wayland`, `x11`, `opengl`, `gsettings`, `home`, `unity7`
+
+---
+
+## Flatpak Package
+
+```bash
+flatpak install flathub io.github.solarpush.RegionToShare
+```
+
+The Flatpak bundles all runtime libraries via the KDE/GNOME runtime.
+
+---
+
+## Build Dependencies
+
+To compile from source (see [BUILD.md](BUILD.md) for full instructions):
+
+```bash
+# Ubuntu/Debian
+sudo apt install -y \
+  cargo rustc pkg-config \
+  libclang-dev clang \
+  libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev \
+  libwayland-dev libxkbcommon-dev \
+  libpipewire-0.3-dev libspa-0.2-dev \
+  libgl1-mesa-dev libegl1-mesa-dev \
+  libdbus-1-dev libfontconfig1-dev libfreetype6-dev libgbm-dev
+```
+
+Minimum Rust version: **1.75**
+
+---
 
 ## Feature-Specific Requirements
 
-### Global Keyboard Shortcuts
-
-- **GNOME**: `gsettings` + `gnome-settings-daemon`
-- **KDE**: Not yet supported (future enhancement)
-- **Other DEs**: Manual shortcut configuration required
-
 ### Wayland Screen Capture
 
-- **Essential**: `gstreamer1.0-pipewire` plugin
-- **Portal**: `xdg-desktop-portal` + implementation
-- **Runtime**: PipeWire daemon (usually pre-installed)
+- **Required at runtime**: PipeWire daemon running (pre-installed on most modern distros)
+- **Required**: a `xdg-desktop-portal` implementation matching your desktop:
+  - GNOME → `xdg-desktop-portal-gnome`
+  - KDE → `xdg-desktop-portal-kde`
+  - wlroots (Sway, Hyprland) → `xdg-desktop-portal-wlr` or `xdg-desktop-portal-hyprland`
 
 ### X11 Screen Capture
 
-- **Fallback**: MSS library (pure Python, bundled)
-- **Performance**: Hardware-accelerated when available
+- Uses `x11rb` with SHM extension — no extra packages needed beyond the base X11 libs above
+- Hardware acceleration available via EGL when Mesa drivers are present
 
-## Verification
-
-After installing system dependencies, verify with:
-
-```python
-# Test core dependencies
-import gi
-gi.require_version('Gst', '1.0')
-from gi.repository import Gst
-import dbus
-from PyQt5.QtWidgets import QApplication
-import mss
-
-print("✅ All system dependencies available")
-
-# Test Wayland portal (if on Wayland)
-try:
-    bus = dbus.SessionBus()
-    portal = bus.get_object('org.freedesktop.portal.Desktop',
-                           '/org/freedesktop/portal/desktop')
-    print("✅ Wayland portal available")
-except:
-    print("⚠️ Wayland portal not available (normal on X11)")
-```
-
-## Performance Notes
-
-- **Wayland**: Optimal performance with hardware-accelerated PipeWire
-- **X11**: MSS provides excellent performance with direct memory access
-- **Snap**: Some performance overhead vs native installation
-- **Frame rates**: 30-60 FPS recommended, 240 FPS maximum supported
+---
 
 ## Troubleshooting
 
-**Portal authorization fails**: Check PipeWire service status
+**Wayland: "User cancelled" or no portal dialog**
+→ Check that `xdg-desktop-portal` and the matching implementation for your DE are installed and running
 
-**gsettings not found**: Install gnome-settings-daemon or use manual shortcuts
+**PipeWire connection failed**
+→ Verify PipeWire is running: `systemctl --user status pipewire`
 
-**High CPU usage**: Reduce frame rate or enable hardware acceleration
+**X11: Black screen / no capture**
+→ Verify the X SHM extension is enabled; check `xdpyinfo | grep -i shm`
 
-**Snap permissions**: Run with `--debug` flag to diagnose issues
+**Snap: permission issues**
+→ Manually connect interfaces if needed:
+
+```bash
+snap connect region-to-share:pipewire
+snap connect region-to-share:wayland
+```
+
+**High CPU usage**
+→ Reduce the framerate in settings (recommended: 30–60 FPS)
