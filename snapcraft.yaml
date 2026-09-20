@@ -1,6 +1,6 @@
 name: region-to-share
 base: core24
-version: '2.1.2'
+version: '2.1.3'
 title: Region to Share
 summary: Share selected screen regions in video calls
 description: |
@@ -8,7 +8,7 @@ description: |
   and display it in a window that you can share directly 
   in your video conferencing applications (Google Meet, Teams, Discord, etc.).
 
-  Version 2.1.1 beta channel Complete Rust rewrite with improved performance.
+  Version 2.1.3 Complete Rust rewrite with improved performance.
   
   What's new:
   - Native Rust implementation (no Python dependencies)
