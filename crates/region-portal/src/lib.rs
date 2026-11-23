@@ -1,17 +1,25 @@
-//! Portal/PipeWire backend for Wayland screen capture.
+//! Portal + PipeWire backend for Wayland screen capture & virtual camera output.
 //!
-//! This crate provides screen capture via the XDG Desktop Portal
-//! ScreenCast interface, which is the standard way to capture screens
-//! on Wayland compositors (GNOME, KDE Plasma, Sway, Hyprland, etc.).
+//! Features:
+//! - XDG Desktop Portal `ScreenCast` v6 introspection (`PortalCapabilities`)
+//! - Persisted `RestoreToken` (`PersistMode::ExplicitlyRevoked`) to avoid repeated prompts
+//! - Native KDE Plasma 6 direct region mode (`zkde_screencast_unstable_v1::stream_region`)
+//!   without forcing a second redundant overlay selection
+//! - In-callback PipeWire cropping with reusable `SharedBufferPool` & stride-safe parsing
+//! - PipeWire Virtual Camera (`Video/Source`, `Camera`) sink for direct Meet/Discord/OBS sharing
 
-mod portal;
 mod pipewire;
+mod portal;
 mod stream;
+mod virtual_cam;
 
-pub use portal::{PortalCapture, PortalError, StreamInfo, RestoreToken};
-pub use pipewire::{PipeWireStream, PipeWireFrame, StreamState};
-pub use stream::PortalBackend;
+pub use pipewire::{PipeWireFrame, PipeWireStream, StreamState};
+pub use portal::{
+    PortalCapabilities, PortalCapture, PortalError, PortalSessionMode, RestoreToken, StreamInfo,
+};
+pub use stream::{PortalBackend, PortalBackendOptions};
+pub use virtual_cam::{VirtualCameraConfig, VirtualCameraSink};
 
-// Re-export for convenience
-pub use region_capture::{CaptureBackend, Capabilities, CaptureError, Frame, Result};
-pub use region_core::{Rectangle, PixelFormat};
+// Re-export core capture types for convenience
+pub use region_capture::{Capabilities, CaptureBackend, CaptureError, Frame, Result};
+pub use region_core::{PixelFormat, Rectangle};

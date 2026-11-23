@@ -35,3 +35,7 @@ build-flatpak/
 # cargo-sources.json est généré (flatpak-cargo-generator) → ne pas versionner
 # EXCEPTION : si vous voulez le commettre pour Flathub CI, retirez la ligne suivante
 cargo-sources.json
+
+# Packaging outputs (KDE .plasmoid / GNOME .shell-extension.zip)
+dist/
+integrations/gnome-extension/schemas/gschemas.compiled

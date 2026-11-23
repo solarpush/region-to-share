@@ -1,0 +1,28 @@
+.region-to-share-pill {
+    border-radius: 999px;
+    padding: 2px 9px;
+    margin: 2px 4px;
+    spacing: 5px;
+    font-size: 11px;
+    font-weight: 700;
+}
+
+.region-to-share-pill.live {
+    background-color: rgba(45, 212, 191, 0.22);
+    border: 1px solid rgba(45, 212, 191, 0.75);
+    color: #2dd4bf;
+}
+
+.region-to-share-pill.recording {
+    background-color: rgba(255, 77, 94, 0.25);
+    border: 1px solid rgba(255, 77, 94, 0.85);
+    color: #ff4d5e;
+}
+
+.region-to-share-dot {
+    font-size: 10px;
+}
+
+.region-to-share-label {
+    font-family: monospace;
+}

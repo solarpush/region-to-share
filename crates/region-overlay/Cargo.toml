@@ -1,0 +1,18 @@
+[package]
+name = "region-overlay"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+region-core = { workspace = true }
+region-platform = { workspace = true }
+log = { workspace = true }
+serde = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+x11rb = { workspace = true }
+wayland-client = { workspace = true }

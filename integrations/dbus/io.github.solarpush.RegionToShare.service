@@ -1,0 +1,3 @@
+[D-BUS Service]
+Name=io.github.solarpush.RegionToShare
+Exec=/usr/bin/region-to-share daemon

@@ -1,8 +1,8 @@
 name: region-to-share
 base: core24
-version: '2.1.3'
+version: '3.0.0'
 title: Region to Share
-summary: Share selected screen regions in video calls
+summary: Share, record live, or stream selected screen regions
 description: |
   Region to Share allows you to select a specific area of your screen
   and display it in a window that you can share directly 
@@ -54,6 +54,7 @@ apps:
       - x11
       - opengl
       - screen-inhibit-control
+      - audio-record
       - home
       - unity7
       - gsettings
@@ -155,10 +156,10 @@ parts:
       mkdir -p $CRAFT_PART_INSTALL/bin
       
       # Copy the release binary
-      if [ -f target/release/region-ui-egui ]; then
-        cp target/release/region-ui-egui $CRAFT_PART_INSTALL/bin/region-to-share-bin
+      if [ -f target/release/region-to-share ]; then
+        cp target/release/region-to-share $CRAFT_PART_INSTALL/bin/region-to-share-bin
       else
-        echo "ERROR: region-ui-egui binary not found!"
+        echo "ERROR: region-to-share binary not found!"
         exit 1
       fi
       

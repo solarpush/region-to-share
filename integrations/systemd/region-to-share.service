@@ -1,0 +1,13 @@
+[Unit]
+Description=Region to Share D-Bus Session Daemon
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=dbus
+BusName=io.github.solarpush.RegionToShare
+ExecStart=/usr/bin/region-to-share daemon
+Restart=on-failure
+
+[Install]
+WantedBy=graphical-session.target

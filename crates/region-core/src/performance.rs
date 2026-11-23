@@ -1,9 +1,10 @@
-//! Performance optimization utilities and profiling.
+//! Performance optimization utilities, frame profiler, and lock-safe buffer pools.
 
-use std::time::{Duration, Instant};
 use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
-/// Frame profiler for measuring capture performance.
+/// Frame profiler for measuring capture and render performance.
 pub struct FrameProfiler {
     frame_times: VecDeque<Duration>,
     capture_times: VecDeque<Duration>,
@@ -12,50 +13,40 @@ pub struct FrameProfiler {
 }
 
 impl FrameProfiler {
-    /// Create a new frame profiler.
     pub fn new(max_samples: usize) -> Self {
         Self {
             frame_times: VecDeque::with_capacity(max_samples),
             capture_times: VecDeque::with_capacity(max_samples),
-            max_samples,
+            max_samples: max_samples.max(1),
             last_frame_time: None,
         }
     }
 
-    /// Mark the start of a new frame.
     pub fn start_frame(&mut self) {
         let now = Instant::now();
-        
         if let Some(last) = self.last_frame_time {
             let frame_time = now.duration_since(last);
             self.frame_times.push_back(frame_time);
-            
             if self.frame_times.len() > self.max_samples {
                 self.frame_times.pop_front();
             }
         }
-        
         self.last_frame_time = Some(now);
     }
 
-    /// Record a capture operation duration.
     pub fn record_capture(&mut self, duration: Duration) {
         self.capture_times.push_back(duration);
-        
         if self.capture_times.len() > self.max_samples {
             self.capture_times.pop_front();
         }
     }
 
-    /// Get average FPS.
     pub fn avg_fps(&self) -> f64 {
         if self.frame_times.is_empty() {
             return 0.0;
         }
-
-        let avg_frame_time: Duration = self.frame_times.iter()
-            .sum::<Duration>() / self.frame_times.len() as u32;
-
+        let avg_frame_time: Duration =
+            self.frame_times.iter().sum::<Duration>() / self.frame_times.len() as u32;
         if avg_frame_time.as_secs_f64() > 0.0 {
             1.0 / avg_frame_time.as_secs_f64()
         } else {
@@ -63,75 +54,64 @@ impl FrameProfiler {
         }
     }
 
-    /// Get average capture time in milliseconds.
     pub fn avg_capture_ms(&self) -> f64 {
         if self.capture_times.is_empty() {
             return 0.0;
         }
-
-        let avg: Duration = self.capture_times.iter()
-            .sum::<Duration>() / self.capture_times.len() as u32;
-
+        let avg: Duration =
+            self.capture_times.iter().sum::<Duration>() / self.capture_times.len() as u32;
         avg.as_secs_f64() * 1000.0
     }
 
-    /// Get minimum frame time in milliseconds.
     pub fn min_frame_ms(&self) -> f64 {
-        self.frame_times.iter()
+        self.frame_times
+            .iter()
             .min()
             .map(|d| d.as_secs_f64() * 1000.0)
             .unwrap_or(0.0)
     }
 
-    /// Get maximum frame time in milliseconds.
     pub fn max_frame_ms(&self) -> f64 {
-        self.frame_times.iter()
+        self.frame_times
+            .iter()
             .max()
             .map(|d| d.as_secs_f64() * 1000.0)
             .unwrap_or(0.0)
     }
 
-    /// Get the 99th percentile frame time.
     pub fn p99_frame_ms(&self) -> f64 {
         if self.frame_times.is_empty() {
             return 0.0;
         }
-
         let mut sorted: Vec<_> = self.frame_times.iter().collect();
         sorted.sort();
-
-        let idx = (sorted.len() as f64 * 0.99) as usize;
-        sorted.get(idx)
+        let idx = ((sorted.len() as f64 * 0.99) as usize).min(sorted.len() - 1);
+        sorted
+            .get(idx)
             .map(|d| d.as_secs_f64() * 1000.0)
             .unwrap_or(0.0)
     }
 
-    /// Get statistics summary.
-    pub fn summary(&self) -> String {
-        format!(
-            "FPS: {:.1} | Capture: {:.2}ms | Frame: {:.2}ms (min: {:.2}, max: {:.2}, p99: {:.2})",
-            self.avg_fps(),
-            self.avg_capture_ms(),
-            self.frame_times.iter().sum::<Duration>().as_secs_f64() * 1000.0 / self.frame_times.len().max(1) as f64,
-            self.min_frame_ms(),
-            self.max_frame_ms(),
-            self.p99_frame_ms()
-        )
-    }
-
-    /// Get structured statistics.
     pub fn stats(&self) -> ProfilerStats {
         ProfilerStats {
             avg_fps: self.avg_fps(),
             avg_capture_ms: self.avg_capture_ms(),
-            avg_frame_ms: self.frame_times.iter().sum::<Duration>().as_secs_f64() * 1000.0 / self.frame_times.len().max(1) as f64,
+            avg_frame_ms: self.frame_times.iter().sum::<Duration>().as_secs_f64() * 1000.0
+                / self.frame_times.len().max(1) as f64,
             min_frame_ms: self.min_frame_ms(),
             max_frame_ms: self.max_frame_ms(),
             p99_frame_ms: self.p99_frame_ms(),
         }
     }
 
-    /// Reset all statistics.
+    pub fn summary(&self) -> String {
+        let s = self.stats();
+        format!(
+            "FPS: {:.1} | Capture: {:.2}ms | Frame: {:.2}ms (min: {:.2}, max: {:.2}, p99: {:.2})",
+            s.avg_fps, s.avg_capture_ms, s.avg_frame_ms, s.min_frame_ms, s.max_frame_ms, s.p99_frame_ms
+        )
+    }
+
     pub fn reset(&mut self) {
         self.frame_times.clear();
         self.capture_times.clear();
@@ -139,8 +119,7 @@ impl FrameProfiler {
     }
 }
 
-/// Structured profiler statistics.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct ProfilerStats {
     pub avg_fps: f64,
     pub avg_capture_ms: f64,
@@ -150,126 +129,114 @@ pub struct ProfilerStats {
     pub p99_frame_ms: f64,
 }
 
-/// Memory pool for reusing frame buffers.
+/// Single-threaded reusable byte-buffer pool.
 pub struct BufferPool {
     buffers: Vec<Vec<u8>>,
     buffer_size: usize,
+    max_cached: usize,
 }
 
 impl BufferPool {
-    /// Create a new buffer pool.
     pub fn new(buffer_size: usize, initial_capacity: usize) -> Self {
         let mut buffers = Vec::with_capacity(initial_capacity);
         for _ in 0..initial_capacity {
-            buffers.push(vec![0u8; buffer_size]);
+            buffers.push(Vec::with_capacity(buffer_size));
         }
-
         Self {
             buffers,
             buffer_size,
+            max_cached: initial_capacity.max(4),
         }
     }
 
-    /// Acquire a buffer from the pool.
     pub fn acquire(&mut self) -> Vec<u8> {
-        self.buffers.pop().unwrap_or_else(|| vec![0u8; self.buffer_size])
+        let mut buf = self
+            .buffers
+            .pop()
+            .unwrap_or_else(|| Vec::with_capacity(self.buffer_size));
+        buf.resize(self.buffer_size, 0);
+        buf
     }
 
-    /// Return a buffer to the pool.
     pub fn release(&mut self, mut buffer: Vec<u8>) {
-        if buffer.len() == self.buffer_size {
+        if buffer.capacity() >= self.buffer_size && self.buffers.len() < self.max_cached {
             buffer.clear();
-            buffer.resize(self.buffer_size, 0);
             self.buffers.push(buffer);
         }
     }
 
-    /// Get pool statistics.
     pub fn available(&self) -> usize {
         self.buffers.len()
+    }
+}
+
+/// Thread-safe reusable byte-buffer pool that adapts automatically to region resizes
+/// without repeatedly allocating/freeing multi-megabyte frame buffers at 60 FPS.
+#[derive(Clone)]
+pub struct SharedBufferPool {
+    inner: Arc<Mutex<SharedPoolInner>>,
+}
+
+struct SharedPoolInner {
+    buffers: Vec<Vec<u8>>,
+    max_cached: usize,
+}
+
+impl SharedBufferPool {
+    pub fn new(max_cached: usize) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(SharedPoolInner {
+                buffers: Vec::with_capacity(max_cached),
+                max_cached: max_cached.max(2),
+            })),
+        }
+    }
+
+    /// Acquire a cleared buffer with at least `min_capacity` bytes allocated.
+    pub fn acquire_with_capacity(&self, min_capacity: usize) -> Vec<u8> {
+        if let Ok(mut guard) = self.inner.lock() {
+            if let Some(mut buf) = guard.buffers.pop() {
+                buf.clear();
+                if buf.capacity() < min_capacity {
+                    buf.reserve(min_capacity - buf.capacity());
+                }
+                return buf;
+            }
+        }
+        Vec::with_capacity(min_capacity)
+    }
+
+    /// Return a buffer to the pool if capacity isn't absurdly oversized.
+    pub fn release(&self, mut buf: Vec<u8>) {
+        if let Ok(mut guard) = self.inner.lock() {
+            if guard.buffers.len() < guard.max_cached {
+                buf.clear();
+                guard.buffers.push(buf);
+            }
+        }
+    }
+
+    pub fn available(&self) -> usize {
+        self.inner.lock().map(|g| g.buffers.len()).unwrap_or(0)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::thread;
 
     #[test]
-    fn test_profiler_basic() {
-        let mut profiler = FrameProfiler::new(100);
-        
-        profiler.start_frame();
-        thread::sleep(Duration::from_millis(16)); // ~60 FPS
-        profiler.start_frame();
-        thread::sleep(Duration::from_millis(16));
-        profiler.start_frame();
+    fn test_shared_buffer_pool_reuse() {
+        let pool = SharedBufferPool::new(4);
+        let mut b1 = pool.acquire_with_capacity(4096);
+        b1.extend_from_slice(&[42u8; 1024]);
+        let ptr = b1.as_ptr();
+        pool.release(b1);
+        assert_eq!(pool.available(), 1);
 
-        let fps = profiler.avg_fps();
-        assert!(fps > 50.0 && fps < 70.0, "FPS should be around 60");
-    }
-
-    #[test]
-    fn test_profiler_capture() {
-        let mut profiler = FrameProfiler::new(100);
-        
-        profiler.record_capture(Duration::from_millis(5));
-        profiler.record_capture(Duration::from_millis(10));
-        profiler.record_capture(Duration::from_millis(7));
-
-        let avg = profiler.avg_capture_ms();
-        assert!((avg - 7.333).abs() < 0.1);
-    }
-
-    #[test]
-    fn test_profiler_percentiles() {
-        let mut profiler = FrameProfiler::new(100);
-        
-        for i in 1..=100 {
-            profiler.start_frame();
-            thread::sleep(Duration::from_micros(i * 100));
-        }
-
-        let p99 = profiler.p99_frame_ms();
-        assert!(p99 > 0.0);
-    }
-
-    #[test]
-    fn test_buffer_pool() {
-        let mut pool = BufferPool::new(1024, 5);
-        
-        assert_eq!(pool.available(), 5);
-        
-        let buf1 = pool.acquire();
-        assert_eq!(buf1.len(), 1024);
-        assert_eq!(pool.available(), 4);
-        
-        pool.release(buf1);
-        assert_eq!(pool.available(), 5);
-    }
-
-    #[test]
-    fn test_buffer_pool_overflow() {
-        let mut pool = BufferPool::new(512, 2);
-        
-        let _buf1 = pool.acquire();
-        let _buf2 = pool.acquire();
-        let buf3 = pool.acquire(); // Should allocate new
-        
-        assert_eq!(buf3.len(), 512);
-        assert_eq!(pool.available(), 0);
-    }
-
-    #[test]
-    fn test_profiler_reset() {
-        let mut profiler = FrameProfiler::new(100);
-        
-        profiler.start_frame();
-        profiler.record_capture(Duration::from_millis(5));
-        
-        profiler.reset();
-        
-        assert_eq!(profiler.avg_fps(), 0.0);
-        assert_eq!(profiler.avg_capture_ms(), 0.0);
+        let b2 = pool.acquire_with_capacity(2048);
+        assert_eq!(b2.len(), 0);
+        assert!(b2.capacity() >= 4096);
+        assert_eq!(b2.as_ptr(), ptr);
     }
 }

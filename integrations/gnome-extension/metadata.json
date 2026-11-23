@@ -1,0 +1,9 @@
+{
+  "uuid": "region-to-share@solarpush.github.io",
+  "name": "Region to Share",
+  "description": "Quick Settings toggle and live Top Bar indicator for sharing, recording live, and streaming screen regions via Region to Share v3.",
+  "shell-version": ["46", "47", "48", "49", "50"],
+  "version": 3,
+  "url": "https://github.com/solarpush/region-to-share",
+  "settings-schema": "org.gnome.shell.extensions.region-to-share"
+}

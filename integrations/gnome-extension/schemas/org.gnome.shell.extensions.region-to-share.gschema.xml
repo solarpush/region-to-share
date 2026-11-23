@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.region-to-share" path="/org/gnome/shell/extensions/region-to-share/">
+    <key name="show-topbar-pill" type="b">
+      <default>true</default>
+      <summary>Show Live Top Bar Pill</summary>
+      <description>Show a live indicator badge in the GNOME Top Bar while sharing or recording.</description>
+    </key>
+  </schema>
+</schemalist>

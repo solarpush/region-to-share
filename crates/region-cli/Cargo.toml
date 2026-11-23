@@ -1,0 +1,38 @@
+[package]
+name = "region-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "region-to-share"
+path = "src/main.rs"
+
+[dependencies]
+region-core = { workspace = true }
+region-config = { workspace = true }
+region-platform = { workspace = true }
+region-capture = { workspace = true }
+region-overlay = { workspace = true }
+region-recorder = { workspace = true }
+region-ipc = { workspace = true }
+region-ui = { workspace = true }
+clap = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+parking_lot = { workspace = true }
+log = { workspace = true }
+env_logger = { workspace = true }
+dirs = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+region-portal = { workspace = true }
+
+[features]
+default = ["x11", "wayland-pipewire"]
+x11 = ["region-capture/x11", "region-ui/x11"]
+wayland-pipewire = ["region-portal/pipewire", "region-ui/wayland-pipewire"]

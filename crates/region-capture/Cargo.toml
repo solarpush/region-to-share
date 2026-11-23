@@ -10,15 +10,19 @@ repository.workspace = true
 [dependencies]
 region-core = { workspace = true }
 async-trait = { workspace = true }
-tokio = { workspace = true }
 thiserror = { workspace = true }
 libc = { workspace = true }
-log = "0.4"
+log = { workspace = true }
+crossbeam-channel = { workspace = true }
+parking_lot = { workspace = true }
 
 # Optional backends
 x11rb = { workspace = true, optional = true }
 pipewire = { workspace = true, optional = true }
 libspa = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
 
 [features]
 default = []

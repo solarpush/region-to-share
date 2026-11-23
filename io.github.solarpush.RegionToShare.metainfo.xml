@@ -139,6 +139,13 @@
 		</screenshot>
 	</screenshots>
 	<releases>
+		<release version="3.0.0" date="2026-11-22">
+			<description>
+				<p>
+					Version 3.0 — Full Capabilities Release: redesigned UI/UX, live crash-safe recording, KDE Plasma 6 Plasmoid, GNOME Shell Extension, PipeWire Virtual Camera, and enriched CLI.
+				</p>
+			</description>
+		</release>
 		<release version="2.0.0-beta3" date="2026-03-04">
 			<description>
 				<p>

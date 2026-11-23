@@ -1,0 +1,20 @@
+[package]
+name = "region-recorder"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+region-core = { workspace = true }
+region-capture = { workspace = true }
+region-platform = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+crossbeam-channel = { workspace = true }
+parking_lot = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+log = { workspace = true }

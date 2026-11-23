@@ -18,8 +18,14 @@ finish-args:
   - --share=ipc               # Mémoire partagée X11 (MIT-SHM)
   # ── GPU / DMA-BUF ──────────────────────────────────────────────────────────
   - --device=dri
-  # ── PipeWire (capture Wayland) ─────────────────────────────────────────────
+  # ── PipeWire (capture Wayland + Caméra Virtuelle) ──────────────────────────
   - --filesystem=xdg-run/pipewire-0
+  # ── D-Bus (communication avec Plasmoid KDE 6, Extension GNOME & CLI) ───────
+  - --own-name=io.github.solarpush.RegionToShare
+  # ── Enregistrements vidéo live & snapshots ─────────────────────────────────
+  - --filesystem=xdg-videos/RegionToShare:create
+  - --filesystem=xdg-pictures/RegionToShare:create
+  - --socket=pulseaudio
   # ── Curseurs Wayland ──────────────────────────────────────────────────────
   # adwaita-icon-theme est compilé dans /app, donc disponible sans accès hôte.
   - --env=XCURSOR_PATH=/app/share/icons:/usr/share/icons
@@ -76,10 +82,13 @@ modules:
         EOF
 
       # ── Compile ─────────────────────────────────────────────────────────────
-      - cargo --offline build --release
+      - cargo --offline build --release -p region-cli
 
       # ── Binaire ─────────────────────────────────────────────────────────────
-      - install -Dm755 target/release/region-ui-egui /app/bin/region-to-share
+      - install -Dm755 target/release/region-to-share /app/bin/region-to-share
+
+      # ── Intégrations KDE Plasma 6 & GNOME Shell ─────────────────────────────
+      - cp -r integrations /app/share/region-to-share/integrations
 
       # ── Licence ─────────────────────────────────────────────────────────────
       - install -Dm644 LICENSE /app/share/licenses/io.github.solarpush.RegionToShare/LICENSE

@@ -10,15 +10,25 @@ repository.workspace = true
 [dependencies]
 region-core = { workspace = true }
 region-capture = { workspace = true }
+region-platform = { workspace = true }
 tokio = { workspace = true }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
 ashpd = { workspace = true }
-pipewire = { workspace = true }
-libspa = { workspace = true }
-crossbeam-channel = "0.5"
-log = "0.4"
-libc = "0.2"
+zbus = { workspace = true }
+futures-util = { workspace = true }
+uuid = { workspace = true }
+pipewire = { workspace = true, optional = true }
+libspa = { workspace = true, optional = true }
+crossbeam-channel = { workspace = true }
+parking_lot = { workspace = true }
+serde = { workspace = true }
+log = { workspace = true }
+libc = { workspace = true }
+
+[features]
+default = ["pipewire"]
+pipewire = ["dep:pipewire", "dep:libspa"]
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

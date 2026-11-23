@@ -1,0 +1,25 @@
+{
+    "KPackageStructure": "Plasma/Applet",
+    "KPlugin": {
+        "Authors": [
+            {
+                "Email": "pierre@solarpush.dev",
+                "Name": "Pierre Solar"
+            }
+        ],
+        "Category": "Graphics",
+        "Description": "Share, record live, or stream any screen region directly from the KDE Plasma 6 panel (native KWin Wayland portal support).",
+        "Description[fr]": "Partagez, enregistrez en live ou diffusez n'importe quelle zone de l'écran directement depuis le tableau de bord KDE Plasma 6.",
+        "Icon": "io.github.solarpush.RegionToShare",
+        "Id": "org.kde.plasma.regiontoshare",
+        "License": "MIT",
+        "Name": "Region to Share",
+        "Name[fr]": "Region to Share",
+        "Version": "3.0.0",
+        "Website": "https://github.com/solarpush/region-to-share"
+    },
+    "X-Plasma-API-Minimum-Version": "6.0",
+    "X-Plasma-Provides": [
+        "org.kde.plasma.screencast"
+    ]
+}
